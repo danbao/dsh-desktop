@@ -1,0 +1,26 @@
+[package]
+name = "dsh-desktop"
+version = "0.1.0"
+description = "DeepSeek Harness 桌面端（macOS）"
+authors = ["danbao"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "dsh_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

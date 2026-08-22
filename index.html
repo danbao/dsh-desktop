@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DSH Desktop</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">
+          <span class="logo">⌘</span>
+          <span class="name">DSH Desktop</span>
+        </div>
+        <span id="status-pill" class="pill pill-idle">加载中…</span>
+        <div class="spacer"></div>
+        <button id="btn-console" class="btn btn-ghost hidden">控制台</button>
+        <button id="btn-app" class="btn btn-ghost hidden">返回应用</button>
+      </header>
+      <main id="main">
+        <!-- Console view -->
+        <section id="console-view">
+          <div class="cards">
+            <div class="card">
+              <h3>环境</h3>
+              <dl id="env-info" class="kv"><dt>检测中…</dt></dl>
+            </div>
+            <div class="card">
+              <h3>Harness 内核（deepseek-harness）</h3>
+              <dl id="harness-info" class="kv"><dt>检测中…</dt></dl>
+              <div class="card-actions">
+                <button id="btn-sync" class="btn">检查更新</button>
+                <button id="btn-update" class="btn btn-primary">更新代码并构建</button>
+                <button id="btn-update-restart" class="btn">更新并重启服务</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>服务</h3>
+              <dl id="service-info" class="kv"><dt>—</dt></dl>
+              <div class="card-actions">
+                <label class="port-label">端口
+                  <input id="port-input" type="number" min="1024" max="65535" />
+                </label>
+                <button id="btn-save-port" class="btn btn-small">保存端口</button>
+                <button id="btn-start" class="btn btn-primary">启动服务</button>
+                <button id="btn-stop" class="btn btn-danger">停止服务</button>
+              </div>
+            </div>
+          </div>
+          <div class="log-wrap">
+            <div class="log-head">
+              <span>日志</span>
+              <button id="btn-clear-log" class="btn btn-small btn-ghost">清空</button>
+            </div>
+            <pre id="log-pane" class="log-pane"></pre>
+          </div>
+        </section>
+        <!-- Embedded harness web UI -->
+        <section id="app-view" class="hidden">
+          <iframe id="frame" title="DeepSeek Harness"></iframe>
+        </section>
+      </main>
+      <div id="toast" class="toast hidden"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
