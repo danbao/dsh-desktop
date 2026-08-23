@@ -1,6 +1,8 @@
 import './style.css'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { check } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 
 /** Snapshot of everything the UI renders, produced by the Rust `get_state`. */
 interface Snapshot {
@@ -187,10 +189,52 @@ async function update(restart: boolean): Promise<void> {
   toast(restart ? '更新完成，服务已按需重启' : '更新并构建完成')
 }
 
+let appUpdateBusy = false
+
+/** 应用本体更新：检查 GitHub Releases → 下载签名包 → 安装并重启。 */
+async function checkAppUpdate(): Promise<void> {
+  if (appUpdateBusy) return
+  appUpdateBusy = true
+  const btn = $<HTMLButtonElement>('#btn-check-update')
+  btn.disabled = true
+  try {
+    const update = await check()
+    if (update === null) {
+      toast('应用已是最新版本')
+      return
+    }
+    toast(`发现新版本 ${update.version}，正在下载…`)
+    appendLog({ source: 'desktop', line: `应用更新：v${update.version}（${update.currentVersion} → ${update.version}）` })
+    let received = 0
+    await update.downloadAndInstall((event) => {
+      switch (event.event) {
+        case 'Started':
+          received = 0
+          break
+        case 'Progress':
+          received += event.data.chunkLength
+          appendLog({ source: 'desktop', line: `下载中… ${Math.round(received / 1024)} KB` })
+          break
+        case 'Finished':
+          appendLog({ source: 'desktop', line: '下载完成，安装并重启' })
+          break
+      }
+    })
+    await relaunch()
+  } catch (err) {
+    toast(`检查更新失败：${String(err)}`, true)
+    appendLog({ source: 'desktop', line: `检查更新失败：${String(err)}` })
+  } finally {
+    appUpdateBusy = false
+    btn.disabled = false
+  }
+}
+
 function bind(): void {
   $('#btn-sync').addEventListener('click', () => void syncOnly())
   $('#btn-update').addEventListener('click', () => void update(false))
   $('#btn-update-restart').addEventListener('click', () => void update(true))
+  $('#btn-check-update').addEventListener('click', () => void checkAppUpdate())
   $('#btn-start').addEventListener('click', () => void run('start_service'))
   $('#btn-stop').addEventListener('click', () => void run('stop_service'))
   $('#btn-save-port').addEventListener('click', async () => {

@@ -19,6 +19,8 @@ use crate::service::AppState;
 pub fn run() {
     service::install_signal_cleanup();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(Arc::new(AppState::new()))
         .setup(|app| {
             let handle = app.handle().clone();

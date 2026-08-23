@@ -51,6 +51,8 @@ pnpm tauri build      # 产出 .app 与 .dmg（src-tauri/target/release/bundle�
 
 推送 `v*` tag（如 `v0.1.0`）触发 [GitHub Actions](.github/workflows/release.yml)，在 macOS runner 上交叉编译 aarch64 与 x86_64 两个架构，自动创建 GitHub Release 并上传 `.app` / `.dmg` 安装包；也可在 Actions 页面手动指定 tag 触发。
 
+应用内置自动更新（Tauri updater）：顶栏「检查更新」从 GitHub Releases 拉取带签名的更新包校验后安装重启，产物签名密钥为 minisign 密钥对（私钥在 repo secrets `TAURI_SIGNING_PRIVATE_KEY`，本地备份 `~/.tauri/dsh-desktop.key`，丢失则历史版本无法升级到新版本）。
+
 ## 架构
 
 ```

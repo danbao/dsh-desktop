@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DSH Desktop",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "com.danbao.dsh-desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -28,9 +28,18 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.icns"],
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness 桌面端",
     "longDescription": "以 Tauri 封装 deepseek-harness：托管内核源码、随时拉取上游最新代码并从源码构建，在应用内运行 dsh Web 界面。"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzM0I1MUMzRTk1MzYwNjkKUldScFlGUHB3MUU3WTBNUXBuYXpsNEo3Zk5QWTFHenRTbFJkNFBUYjVzKy9FM0RMdnNXT2JZTFUK",
+      "endpoints": [
+        "https://github.com/danbao/dsh-desktop/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
