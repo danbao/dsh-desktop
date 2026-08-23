@@ -47,6 +47,10 @@ DSH_DESKTOP_HARNESS_PATH=/path/to/deepseek-harness pnpm tauri dev
 pnpm tauri build      # 产出 .app 与 .dmg（src-tauri/target/release/bundle）
 ```
 
+## 发布
+
+推送 `v*` tag（如 `v0.1.0`）触发 [GitHub Actions](.github/workflows/release.yml)，在 macOS runner 上交叉编译 aarch64 与 x86_64 两个架构，自动创建 GitHub Release 并上传 `.app` / `.dmg` 安装包；也可在 Actions 页面手动指定 tag 触发。
+
 ## 架构
 
 ```

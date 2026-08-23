@@ -1,0 +1,60 @@
+name: Release
+
+# 打 v* tag 发布正式版；手动触发时在 inputs.tagName 上创建 Release。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tagName:
+        description: 'Release tag（如 v0.1.0）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ inputs.tagName || github.ref_name }}
+          releaseName: 'DSH Desktop ${{ inputs.tagName || github.ref_name }}'
+          releaseBody: 'DeepSeek Harness 桌面端：托管内核源码、随时更新并本地运行。安装包未签名公证，首次打开需右键 → 打开放行。'
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}
