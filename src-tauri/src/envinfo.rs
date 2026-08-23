@@ -33,7 +33,10 @@ impl EnvInfo {
 
         let mut problems = Vec::new();
         if node_bin.is_none() {
-            problems.push("未找到 node（需要 Node.js ^22.19 或 >=24）".to_string());
+            problems.push("未找到 node（需要 Node.js >=24）".to_string());
+        }
+        if pnpm_bin.is_none() {
+            problems.push("未找到 pnpm".to_string());
         }
         let git_version = git_bin.as_deref().and_then(|git| {
             extracted_version(git, &["--version"], |out| {
@@ -42,9 +45,7 @@ impl EnvInfo {
         });
         if let Some(version) = &node_version {
             if !node_version_ok(version) {
-                problems.push(format!(
-                    "node {version} 不满足要求（^22.19.0 或 >=24.0.0）"
-                ));
+                problems.push(format!("node {version} 不满足要求（>=24.0.0）"));
             }
         }
 
@@ -64,6 +65,9 @@ fn version_flag(flag: &'static str) -> impl Fn(&str) -> Option<String> {
     move |bin| {
         Command::new(bin)
             .arg(flag)
+            // Shims like corepack's pnpm launch `node` via env(1), so probes
+            // need the login-shell PATH, not the GUI-inherited one.
+            .env("PATH", util::login_path())
             .output()
             .ok()
             .filter(|out| out.status.success())
@@ -74,19 +78,24 @@ fn extracted_version<F>(bin: &str, args: &[&str], extract: F) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let output = Command::new(bin).args(args).output().ok()?;
+    let output = Command::new(bin)
+        .args(args)
+        .env("PATH", util::login_path())
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
     extract(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Harness `engines`: `^22.19.0 || >=24.0.0`.
+/// 本项目的工具链要求：Node `>=24.0.0`（上游 harness engines 为
+/// `^22.19.0 || >=24.0.0`，本项目统一取 >=24）。
 fn node_version_ok(version: &str) -> bool {
-    let Some((major, minor)) = parse_node_version(version) else {
+    let Some((major, _minor)) = parse_node_version(version) else {
         return false;
     };
-    (major == 22 && minor >= 19) || major >= 24
+    major >= 24
 }
 
 fn parse_node_version(version: &str) -> Option<(u64, u64)> {

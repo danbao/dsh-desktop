@@ -16,7 +16,7 @@
 
 - macOS（开发与打包均在 macOS 完成）
 - [Rust](https://rustup.rs/) 与 Xcode Command Line Tools
-- Node.js `^22.19 || >=24` 与 pnpm（构建 harness 内核用）
+- Node.js `>=24` 与 pnpm（构建 harness 内核用）
 - 首次克隆需要网络
 
 ## 数据目录

@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -54,7 +54,7 @@ jobs:
         with:
           tagName: ${{ inputs.tagName || github.ref_name }}
           releaseName: 'DSH Desktop ${{ inputs.tagName || github.ref_name }}'
-          releaseBody: 'DeepSeek Harness 桌面端：托管内核源码、随时更新并本地运行。安装包未签名公证，首次打开需右键 → 打开放行。'
+          releaseBody: 'DeepSeek Harness 桌面端：托管内核源码、随时更新并本地运行。安装包未签名公证，下载后需执行 xattr -cr "/Applications/DSH Desktop.app" 移除隔离标记，否则 macOS 会误报「已损坏」。'
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}

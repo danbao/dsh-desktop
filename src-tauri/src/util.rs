@@ -68,6 +68,10 @@ pub fn stream_command(
     app: &tauri::AppHandle,
     source: &str,
 ) -> anyhow::Result<()> {
+    // Children need the login-shell PATH: toolchain shims such as corepack's
+    // pnpm resolve `node` through `#!/usr/bin/env node`, which fails on the
+    // minimal PATH a GUI app inherits.
+    cmd.env("PATH", login_path());
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
