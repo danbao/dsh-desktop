@@ -67,7 +67,6 @@ interface PluginInfo {
   homepage: string | null
   requestedVersion: string | null
   installedVersion: string | null
-  curated: boolean
 }
 
 interface PluginCatalog {
@@ -341,6 +340,10 @@ function renderPluginManager(): void {
     list.innerHTML = '<div class="plugin-empty">正在读取 web profile…</div>'
     return
   }
+  if (pluginCatalog.plugins.length === 0) {
+    list.innerHTML = '<div class="plugin-empty">尚未安装插件，可在下方输入 npm 包名安装。</div>'
+    return
+  }
   list.innerHTML = pluginCatalog.plugins.map((plugin) => {
     const update = pluginUpdates.get(plugin.packageName)
     const installed = plugin.installedVersion !== null
@@ -381,7 +384,6 @@ function renderPluginManager(): void {
         <div class="plugin-identity">
           <div class="plugin-name-line">
             <strong>${escapeHtml(plugin.displayName)}</strong>
-            ${plugin.curated ? '<span class="plugin-badge">精选</span>' : '<span class="plugin-badge neutral">自定义</span>'}
           </div>
           <code>${escapeHtml(plugin.packageName)}</code>
           <p>${escapeHtml(plugin.description)} ${homepage}</p>

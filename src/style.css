@@ -388,19 +388,6 @@ body {
   font-weight: 600;
 }
 
-.plugin-badge {
-  padding: 2px 6px;
-  border: 1px solid rgba(77, 107, 254, 0.45);
-  border-radius: 999px;
-  color: #9aabff;
-  font-size: 9.5px;
-}
-
-.plugin-badge.neutral {
-  border-color: var(--border);
-  color: var(--text-dim);
-}
-
 .plugin-identity code {
   display: block;
   margin-top: 4px;
