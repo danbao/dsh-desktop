@@ -76,7 +76,42 @@
                 <button id="btn-stop" class="btn btn-danger">停止服务</button>
               </div>
             </div>
+            <div class="card">
+              <div class="card-title-row">
+                <h3>插件</h3>
+                <span id="plugin-ready-dot" class="env-dot" aria-hidden="true"></span>
+              </div>
+              <dl id="plugin-info" class="kv"><dt>状态</dt><dd>读取中…</dd></dl>
+              <div class="card-actions">
+                <button id="btn-toggle-plugins" class="btn" type="button" aria-expanded="false">管理插件</button>
+              </div>
+            </div>
           </div>
+          <section id="plugin-manager" class="plugin-manager hidden" aria-labelledby="plugin-manager-title">
+            <div class="plugin-manager-head">
+              <div>
+                <p class="plugin-eyebrow">WEB PROFILE / PACKAGE MANIFEST</p>
+                <h2 id="plugin-manager-title">插件管理</h2>
+                <p class="plugin-intro">安装到桌面端使用的 web profile。变更时会自动停服，并在完成后恢复。</p>
+              </div>
+              <div class="plugin-manager-actions">
+                <button id="btn-check-plugin-updates" class="btn btn-small" type="button">检查更新</button>
+                <button id="btn-close-plugins" class="btn btn-small btn-ghost" type="button">收起</button>
+              </div>
+            </div>
+            <div id="plugin-manager-status" class="plugin-manager-status" role="status"></div>
+            <div id="plugin-list" class="plugin-list"></div>
+            <form id="custom-plugin-form" class="custom-plugin-form">
+              <div>
+                <label for="custom-plugin-spec">安装自定义 npm 插件</label>
+                <p>仅接受包名、精确版本或 dist-tag；不支持 Git、URL 和本地路径。</p>
+              </div>
+              <div class="custom-plugin-control">
+                <input id="custom-plugin-spec" type="text" placeholder="例如 dsh-ringcentral@0.3.3" autocomplete="off" spellcheck="false" />
+                <button id="btn-install-custom-plugin" class="btn btn-primary" type="submit">安装</button>
+              </div>
+            </form>
+          </section>
           <div class="log-wrap">
             <div class="log-head">
               <span>日志</span>

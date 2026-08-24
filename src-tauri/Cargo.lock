@@ -849,6 +849,7 @@ version = "0.2.3"
 dependencies = [
  "anyhow",
  "libc",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

@@ -58,6 +58,36 @@ interface LogPage {
   hasMore: boolean
 }
 
+type PluginAction = 'install' | 'update' | 'reinstall' | 'remove'
+
+interface PluginInfo {
+  packageName: string
+  displayName: string
+  description: string
+  homepage: string | null
+  requestedVersion: string | null
+  installedVersion: string | null
+  curated: boolean
+}
+
+interface PluginCatalog {
+  profile: string
+  plugins: PluginInfo[]
+}
+
+interface PluginUpdate {
+  packageName: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  error: string | null
+}
+
+interface ManagePluginResult {
+  catalog: PluginCatalog
+  serviceRestarted: boolean
+  message: string
+}
+
 interface DisplayLog extends LogLine {
   backendId: number | null
   localId: number | null
@@ -74,6 +104,15 @@ let snap: Snapshot | null = null
 let toolchainSaving = false
 let activeView: 'console' | 'app' = 'console'
 let previousServiceStatus: Snapshot['service']['status'] | null = null
+let pluginCatalog: PluginCatalog | null = null
+let pluginUpdates = new Map<string, PluginUpdate>()
+let pluginPanelOpen = false
+let pluginLoading = false
+let pluginChecking = false
+let pluginOperation = false
+let pluginUpdatesChecked = false
+let pluginError: string | null = null
+let keepConsoleDuringServiceTransition = false
 const LOG_CHUNK_SIZE = 250
 const LOG_PAGE_SIZE = 2000
 let logEntries: DisplayLog[] = []
@@ -218,6 +257,153 @@ function pillClass(status: Snapshot['service']['status']): string {
   }
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char] ?? char)
+}
+
+function pluginActionsDisabled(): boolean {
+  return pluginOperation
+    || snap?.busy !== null
+    || snap?.env.ready !== true
+    || snap?.harness.present !== true
+}
+
+function renderPluginSummary(): void {
+  const dot = $('#plugin-ready-dot')
+  const info = $('#plugin-info')
+  const toggle = $<HTMLButtonElement>('#btn-toggle-plugins')
+  toggle.setAttribute('aria-expanded', String(pluginPanelOpen))
+  toggle.textContent = pluginPanelOpen ? '收起插件' : '管理插件'
+  toggle.disabled = pluginLoading
+
+  if (pluginError !== null) {
+    dot.className = 'env-dot problem'
+    info.innerHTML = kv([
+      ['Profile', 'web'],
+      ['状态', pluginError],
+    ])
+    return
+  }
+  if (pluginCatalog === null) {
+    dot.className = 'env-dot'
+    info.innerHTML = kv([
+      ['Profile', 'web'],
+      ['状态', pluginLoading ? '读取中…' : '尚未读取'],
+    ])
+    return
+  }
+  const installed = pluginCatalog.plugins.filter((plugin) => plugin.installedVersion !== null).length
+  const updates = [...pluginUpdates.values()].filter((update) => update.updateAvailable).length
+  dot.className = 'env-dot ready'
+  info.innerHTML = kv([
+    ['Profile', pluginCatalog.profile],
+    ['已安装', `${installed} 个`],
+    ['可更新', pluginUpdatesChecked ? `${updates} 个` : '未检查'],
+  ])
+}
+
+function renderPluginManager(): void {
+  $('#plugin-manager').classList.toggle('hidden', !pluginPanelOpen)
+  if (!pluginPanelOpen) return
+
+  const status = $('#plugin-manager-status')
+  const failedChecks = [...pluginUpdates.values()].filter((update) => update.error !== null).length
+  if (pluginError !== null) {
+    status.textContent = `读取插件失败：${pluginError}`
+    status.className = 'plugin-manager-status problem'
+  } else if (pluginOperation) {
+    status.textContent = '正在变更插件；若服务已运行，桌面端会在完成后自动恢复。'
+    status.className = 'plugin-manager-status working'
+  } else if (pluginChecking) {
+    status.textContent = '正在从 npm registry 检查版本…'
+    status.className = 'plugin-manager-status working'
+  } else if (failedChecks > 0) {
+    status.textContent = `${failedChecks} 个插件暂时无法检查更新，本地管理仍可使用。`
+    status.className = 'plugin-manager-status problem'
+  } else {
+    status.textContent = '插件保存在 ~/.dsh/profiles/web，更新 Harness 源码不会覆盖。'
+    status.className = 'plugin-manager-status'
+  }
+
+  const disabled = pluginActionsDisabled()
+  $<HTMLButtonElement>('#btn-check-plugin-updates').disabled = disabled || pluginChecking || pluginCatalog === null
+  $<HTMLInputElement>('#custom-plugin-spec').disabled = disabled
+  $<HTMLButtonElement>('#btn-install-custom-plugin').disabled = disabled
+
+  const list = $('#plugin-list')
+  if (pluginCatalog === null) {
+    list.innerHTML = '<div class="plugin-empty">正在读取 web profile…</div>'
+    return
+  }
+  list.innerHTML = pluginCatalog.plugins.map((plugin) => {
+    const update = pluginUpdates.get(plugin.packageName)
+    const installed = plugin.installedVersion !== null
+    const broken = plugin.requestedVersion !== null && !installed
+    const stateClass = update?.updateAvailable === true ? 'update' : installed ? 'installed' : broken ? 'problem' : 'idle'
+    const stateText = update?.updateAvailable === true
+      ? `可升级至 ${update.latestVersion ?? '最新版'}`
+      : installed
+        ? `已安装 ${plugin.installedVersion}`
+        : broken
+          ? '安装不完整'
+          : '未安装'
+    const versionText = update?.latestVersion !== null && update?.latestVersion !== undefined
+      ? `registry ${update.latestVersion}`
+      : pluginUpdatesChecked
+        ? 'registry 版本未知'
+        : '尚未检查 registry'
+    const homepage = plugin.homepage === null
+      ? ''
+      : `<a class="plugin-homepage" href="${escapeHtml(plugin.homepage)}" target="_blank" rel="noopener noreferrer">项目主页</a>`
+    const actions = installed
+      ? [
+          update?.updateAvailable === true
+            ? `<button class="btn btn-small btn-primary" aria-label="升级 ${escapeHtml(plugin.displayName)}" data-plugin-action="update" data-package="${escapeHtml(plugin.packageName)}">升级</button>`
+            : '',
+          `<button class="btn btn-small" aria-label="重装 ${escapeHtml(plugin.displayName)}" data-plugin-action="reinstall" data-package="${escapeHtml(plugin.packageName)}">重装</button>`,
+          `<button class="btn btn-small btn-danger" aria-label="卸载 ${escapeHtml(plugin.displayName)}" data-plugin-action="remove" data-package="${escapeHtml(plugin.packageName)}">卸载</button>`,
+        ].join('')
+      : broken
+        ? [
+            `<button class="btn btn-small btn-primary" aria-label="修复安装 ${escapeHtml(plugin.displayName)}" data-plugin-action="install" data-package="${escapeHtml(plugin.packageName)}">修复安装</button>`,
+            `<button class="btn btn-small btn-danger" aria-label="卸载 ${escapeHtml(plugin.displayName)}" data-plugin-action="remove" data-package="${escapeHtml(plugin.packageName)}">卸载</button>`,
+          ].join('')
+        : `<button class="btn btn-small btn-primary" aria-label="安装 ${escapeHtml(plugin.displayName)}" data-plugin-action="install" data-package="${escapeHtml(plugin.packageName)}">安装</button>`
+    return `
+      <article class="plugin-row">
+        <span class="plugin-track ${stateClass}" aria-hidden="true"></span>
+        <div class="plugin-identity">
+          <div class="plugin-name-line">
+            <strong>${escapeHtml(plugin.displayName)}</strong>
+            ${plugin.curated ? '<span class="plugin-badge">精选</span>' : '<span class="plugin-badge neutral">自定义</span>'}
+          </div>
+          <code>${escapeHtml(plugin.packageName)}</code>
+          <p>${escapeHtml(plugin.description)} ${homepage}</p>
+        </div>
+        <div class="plugin-version">
+          <strong>${escapeHtml(stateText)}</strong>
+          <span>${escapeHtml(versionText)}</span>
+          ${plugin.requestedVersion === null ? '' : `<span>声明 ${escapeHtml(plugin.requestedVersion)}</span>`}
+        </div>
+        <div class="plugin-row-actions">${actions}</div>
+      </article>`
+  }).join('')
+  list.querySelectorAll<HTMLButtonElement>('[data-plugin-action]').forEach((button) => {
+    button.disabled = disabled
+  })
+}
+
+function renderPlugins(): void {
+  renderPluginSummary()
+  renderPluginManager()
+}
+
 function render(): void {
   if (snap === null) return
   const { env, harness, service, busy } = snap
@@ -279,8 +465,9 @@ function render(): void {
   pickNodeBtn.disabled = running || service.status === 'starting' || toolchainSaving
   pickPnpmBtn.disabled = running || service.status === 'starting' || toolchainSaving
   $('#toolchain-running-hint').classList.toggle('hidden', service.status === 'stopped')
+  renderPlugins()
 
-  if (running && previousServiceStatus !== 'running') {
+  if (running && previousServiceStatus !== 'running' && !keepConsoleDuringServiceTransition) {
     activeView = 'app'
   } else if (!running) {
     activeView = 'console'
@@ -400,6 +587,93 @@ async function update(restart: boolean): Promise<void> {
   toast(restart ? '更新完成，服务已按需重启' : '更新并构建完成')
 }
 
+async function loadPlugins(checkUpdates: boolean): Promise<void> {
+  if (pluginLoading) return
+  pluginLoading = true
+  pluginError = null
+  renderPlugins()
+  let shouldCheck = false
+  try {
+    pluginCatalog = await invoke<PluginCatalog>('get_plugins')
+    shouldCheck = checkUpdates
+  } catch (err) {
+    pluginError = String(err)
+  } finally {
+    pluginLoading = false
+    renderPlugins()
+  }
+  if (shouldCheck && snap?.env.ready === true && snap.harness.present) {
+    await checkPluginUpdates()
+  }
+}
+
+async function checkPluginUpdates(): Promise<void> {
+  if (pluginChecking || pluginOperation || pluginCatalog === null) return
+  pluginChecking = true
+  renderPlugins()
+  try {
+    const updates = await invoke<PluginUpdate[]>('check_plugin_updates')
+    pluginUpdates = new Map(updates.map((update) => [update.packageName, update]))
+    pluginUpdatesChecked = true
+  } catch (err) {
+    toast(`检查插件更新失败：${String(err)}`, true)
+  } finally {
+    pluginChecking = false
+    renderPlugins()
+  }
+}
+
+async function setPluginPanel(show: boolean): Promise<void> {
+  pluginPanelOpen = show
+  renderPlugins()
+  if (show) await loadPlugins(true)
+}
+
+async function managePlugin(action: PluginAction, packageSpec: string): Promise<void> {
+  if (pluginOperation || pluginActionsDisabled()) return
+  pluginOperation = true
+  keepConsoleDuringServiceTransition = true
+  activeView = 'console'
+  render()
+  try {
+    const result = await invoke<ManagePluginResult>('manage_plugin', {
+      request: { action, packageSpec },
+    })
+    pluginCatalog = result.catalog
+    pluginUpdates.clear()
+    pluginUpdatesChecked = false
+    const customInput = $<HTMLInputElement>('#custom-plugin-spec')
+    if (action === 'install' && customInput.value.trim() === packageSpec) customInput.value = ''
+    toast(`${result.message}${result.serviceRestarted ? '，服务已恢复' : ''}`)
+    if (action === 'install') {
+      appendLog({ source: 'plugin', line: '请到 工作台 → 设置 → 插件 → 插件配置 完成配置' })
+    }
+  } catch (err) {
+    toast(`插件操作失败：${String(err)}`, true)
+    appendLog({ source: 'plugin', line: `插件操作失败：${String(err)}` })
+    await loadPlugins(false)
+  } finally {
+    await refresh()
+    pluginOperation = false
+    keepConsoleDuringServiceTransition = false
+    activeView = 'console'
+    render()
+  }
+  void checkPluginUpdates()
+}
+
+function confirmPluginAction(action: PluginAction, packageSpec: string): boolean {
+  const restarts = snap?.service.status === 'running' || snap?.service.status === 'starting'
+  const restartHint = restarts ? '\n\nHarness 服务会短暂停止并自动恢复。' : ''
+  if (action === 'remove') {
+    return window.confirm(`确认卸载 ${packageSpec}？${restartHint}`)
+  }
+  if (action === 'install' && $<HTMLInputElement>('#custom-plugin-spec').value.trim() === packageSpec) {
+    return window.confirm(`确认从 npm registry 安装 ${packageSpec}？插件代码将在本机运行。${restartHint}`)
+  }
+  return true
+}
+
 let appUpdateBusy = false
 
 /** 应用本体更新：检查 GitHub Releases → 下载签名包 → 安装并重启。 */
@@ -446,6 +720,29 @@ function bind(): void {
   $('#btn-update').addEventListener('click', () => void update(false))
   $('#btn-update-restart').addEventListener('click', () => void update(true))
   $('#btn-check-update').addEventListener('click', () => void checkAppUpdate())
+  $('#btn-toggle-plugins').addEventListener('click', () => void setPluginPanel(!pluginPanelOpen))
+  $('#btn-close-plugins').addEventListener('click', () => void setPluginPanel(false))
+  $('#btn-check-plugin-updates').addEventListener('click', () => void checkPluginUpdates())
+  $('#plugin-list').addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-plugin-action]')
+    if (button === null) return
+    const action = button.dataset.pluginAction as PluginAction | undefined
+    const packageSpec = button.dataset.package
+    if (action === undefined || packageSpec === undefined || !confirmPluginAction(action, packageSpec)) return
+    void managePlugin(action, packageSpec)
+  })
+  $('#custom-plugin-form').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const input = $<HTMLInputElement>('#custom-plugin-spec')
+    const packageSpec = input.value.trim()
+    if (packageSpec === '') {
+      toast('请输入 npm 插件包名', true)
+      input.focus()
+      return
+    }
+    if (!confirmPluginAction('install', packageSpec)) return
+    void managePlugin('install', packageSpec)
+  })
   $('#btn-refresh-toolchain').addEventListener('click', () => void refreshToolchain())
   $('#btn-toggle-toolchain').addEventListener('click', () => {
     showToolchainSettings($('#toolchain-settings').classList.contains('hidden'))
@@ -490,6 +787,7 @@ async function initialize(): Promise<void> {
   await subscribe()
   await hydrateLogs()
   await refresh()
+  await loadPlugins(false)
 }
 
 void initialize().catch((err) => {
