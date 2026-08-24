@@ -72,6 +72,8 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
 
 let snap: Snapshot | null = null
 let toolchainSaving = false
+let activeView: 'console' | 'app' = 'console'
+let previousServiceStatus: Snapshot['service']['status'] | null = null
 const LOG_CHUNK_SIZE = 250
 const LOG_PAGE_SIZE = 2000
 let logEntries: DisplayLog[] = []
@@ -278,11 +280,21 @@ function render(): void {
   pickPnpmBtn.disabled = running || service.status === 'starting' || toolchainSaving
   $('#toolchain-running-hint').classList.toggle('hidden', service.status === 'stopped')
 
-  const showApp = running && !$('#app-view').classList.contains('hidden')
+  if (running && previousServiceStatus !== 'running') {
+    activeView = 'app'
+  } else if (!running) {
+    activeView = 'console'
+  }
+  previousServiceStatus = service.status
+
+  const showApp = running && activeView === 'app'
   $('#console-view').classList.toggle('hidden', showApp)
-  $('#app-view').classList.toggle('hidden', !running)
-  $('#btn-console').classList.toggle('hidden', !running)
-  $('#btn-app').classList.toggle('hidden', !(running && $('#console-view').classList.contains('hidden')))
+  $('#app-view').classList.toggle('hidden', !showApp)
+  const consoleBtn = $<HTMLButtonElement>('#btn-console')
+  const appBtn = $<HTMLButtonElement>('#btn-app')
+  consoleBtn.setAttribute('aria-pressed', String(!showApp))
+  appBtn.setAttribute('aria-pressed', String(showApp))
+  appBtn.disabled = !running
   if (running) {
     const frame = $<HTMLIFrameElement>('#frame')
     if (!frame.src.startsWith('http://127.0.0.1') || !frame.src.includes(`:${service.port}`)) {
@@ -455,16 +467,13 @@ function bind(): void {
   })
   $('#btn-clear-log').addEventListener('click', () => void clearLogs())
   $('#btn-console').addEventListener('click', () => {
-    $('#app-view').classList.add('hidden')
-    $('#console-view').classList.remove('hidden')
-    $('#btn-app').classList.remove('hidden')
-    $('#btn-console').classList.add('hidden')
+    activeView = 'console'
+    render()
   })
   $('#btn-app').addEventListener('click', () => {
-    $('#console-view').classList.add('hidden')
-    $('#app-view').classList.remove('hidden')
-    $('#btn-console').classList.remove('hidden')
-    $('#btn-app').classList.add('hidden')
+    if (snap?.service.status !== 'running') return
+    activeView = 'app'
+    render()
   })
 }
 
