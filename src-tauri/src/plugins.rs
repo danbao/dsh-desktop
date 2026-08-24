@@ -30,7 +30,6 @@ pub struct PluginInfo {
     pub homepage: Option<String>,
     pub requested_version: Option<String>,
     pub installed_version: Option<String>,
-    pub curated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -302,28 +301,8 @@ fn read_plugins_from(profile_dir: &Path) -> anyhow::Result<PluginCatalog> {
         .collect::<HashSet<_>>();
 
     let mut plugins = Vec::new();
-    for curated in curated_plugins() {
-        let requested_version = manifest.dependencies.get(curated.package_name).cloned();
-        let installed_version = bundle_names
-            .contains(curated.package_name)
-            .then(|| installed_bundle_version(profile_dir, curated.package_name))
-            .flatten();
-        plugins.push(PluginInfo {
-            package_name: curated.package_name.into(),
-            display_name: curated.display_name.into(),
-            description: curated.description.into(),
-            homepage: Some(curated.homepage.into()),
-            requested_version,
-            installed_version,
-            curated: true,
-        });
-    }
-
     for (name, requested_version) in &manifest.dependencies {
-        if curated_plugins()
-            .iter()
-            .any(|plugin| plugin.package_name == name)
-            || BUILTIN_BUNDLES.contains(&name.as_str())
+        if BUILTIN_BUNDLES.contains(&name.as_str())
             || !bundle_names.contains(name.as_str())
             || !valid_package_name(name)
         {
@@ -336,7 +315,6 @@ fn read_plugins_from(profile_dir: &Path) -> anyhow::Result<PluginCatalog> {
             homepage: None,
             requested_version: Some(requested_version.clone()),
             installed_version: installed_bundle_version(profile_dir, name),
-            curated: false,
         });
     }
 
@@ -355,22 +333,6 @@ fn installed_bundle_version(profile_dir: &Path, name: &str) -> Option<String> {
     let manifest = serde_json::from_str::<InstalledManifest>(&text).ok()?;
     manifest.dsh.bundle.patch.as_ref()?;
     Some(manifest.version)
-}
-
-struct CuratedPlugin {
-    package_name: &'static str,
-    display_name: &'static str,
-    description: &'static str,
-    homepage: &'static str,
-}
-
-fn curated_plugins() -> &'static [CuratedPlugin] {
-    &[CuratedPlugin {
-        package_name: "dsh-ringcentral",
-        display_name: "RingCentral",
-        description: "连接 RingCentral Team Messaging，将 Bot 消息接入 DSH agent。",
-        homepage: "https://github.com/ringclaw/dsh-ringcentral",
-    }]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -583,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_curated_and_installed_custom_bundles_from_a_profile() {
+    fn lists_installed_bundles_from_a_profile() {
         let temp = tempfile::tempdir().unwrap();
         let profile = temp.path();
         fs::write(
@@ -607,36 +569,28 @@ mod tests {
 
         assert_eq!(catalog.profile, "web");
         assert_eq!(catalog.plugins.len(), 2);
-        assert_eq!(
-            catalog.plugins[0],
-            PluginInfo {
-                package_name: "dsh-ringcentral".into(),
-                display_name: "RingCentral".into(),
-                description: "连接 RingCentral Team Messaging，将 Bot 消息接入 DSH agent。".into(),
-                homepage: Some("https://github.com/ringclaw/dsh-ringcentral".into()),
-                requested_version: Some("^0.3.0".into()),
-                installed_version: Some("0.3.3".into()),
-                curated: true,
-            }
-        );
-        assert_eq!(catalog.plugins[1].package_name, "acme-dsh");
-        assert_eq!(catalog.plugins[1].display_name, "acme-dsh");
-        assert_eq!(
-            catalog.plugins[1].installed_version.as_deref(),
-            Some("1.4.0")
-        );
-        assert!(!catalog.plugins[1].curated);
+        let ringcentral = catalog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.package_name == "dsh-ringcentral")
+            .unwrap();
+        assert_eq!(ringcentral.installed_version.as_deref(), Some("0.3.3"));
+        let acme = catalog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.package_name == "acme-dsh")
+            .unwrap();
+        assert_eq!(acme.display_name, "acme-dsh");
+        assert_eq!(acme.installed_version.as_deref(), Some("1.4.0"));
     }
 
     #[test]
-    fn keeps_curated_plugins_visible_before_profile_initialization() {
+    fn returns_an_empty_catalog_before_profile_initialization() {
         let temp = tempfile::tempdir().unwrap();
 
         let catalog = read_plugins_from(temp.path()).unwrap();
 
-        assert_eq!(catalog.plugins.len(), 1);
-        assert_eq!(catalog.plugins[0].package_name, "dsh-ringcentral");
-        assert_eq!(catalog.plugins[0].installed_version, None);
+        assert!(catalog.plugins.is_empty());
     }
 
     #[test]
