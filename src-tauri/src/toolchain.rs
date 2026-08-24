@@ -125,7 +125,7 @@ impl ToolchainEnv {
             resolve_automatic(Tool::Node, &entries, &base_path)
         };
         if configured_node.is_none() && node.is_none() {
-            problems.push("未找到可用 node（需要 Node.js >=24）".to_string());
+            problems.push("未找到可用 node（需要 Node.js ^22.19 或 >=24）".to_string());
         }
 
         let path_with_node = prepend_tool_dir(&base_path, node.as_ref());
@@ -245,7 +245,7 @@ fn resolve_manual(path: &Path, tool: Tool, path_env: &OsStr) -> Result<ResolvedT
         ));
     };
     if matches!(tool, Tool::Node) && !node_version_ok(&version) {
-        return Err(format!("node {version} 不满足要求（>=24.0.0）"));
+        return Err(format!("node {version} 不满足要求（^22.19.0 或 >=24.0.0）"));
     }
     Ok(ResolvedTool {
         path: path.to_path_buf(),
@@ -307,13 +307,15 @@ fn probe_version(path: &Path, tool: Tool, path_env: &OsStr) -> Option<String> {
 }
 
 fn node_version_ok(version: &str) -> bool {
-    version
-        .trim()
-        .trim_start_matches('v')
-        .split('.')
+    let mut parts = version.trim().trim_start_matches('v').split('.');
+    let Some(major) = parts.next().and_then(|part| part.parse::<u64>().ok()) else {
+        return false;
+    };
+    let minor = parts
         .next()
         .and_then(|part| part.parse::<u64>().ok())
-        .is_some_and(|major| major >= 24)
+        .unwrap_or(0);
+    (major == 22 && minor >= 19) || major >= 24
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -659,9 +661,12 @@ mod tests {
 
     #[test]
     fn accepts_only_supported_node_major() {
+        assert!(node_version_ok("v22.19.0"));
+        assert!(node_version_ok("v22.20.1"));
         assert!(node_version_ok("v24.0.0"));
         assert!(node_version_ok("25.1.0"));
-        assert!(!node_version_ok("v22.19.0"));
+        assert!(!node_version_ok("v22.18.0"));
+        assert!(!node_version_ok("v23.0.0"));
         assert!(!node_version_ok("not-a-version"));
     }
 
