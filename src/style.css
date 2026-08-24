@@ -299,14 +299,20 @@ body {
 
 .log-pane {
   flex: 1;
-  margin: 0;
   padding: 10px 12px;
   overflow: auto;
   font-family: 'SF Mono', ui-monospace, Menlo, monospace;
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+.log-chunk {
+  margin: 0;
+  font: inherit;
   white-space: pre-wrap;
   word-break: break-all;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 650px;
 }
 
 #app-view {

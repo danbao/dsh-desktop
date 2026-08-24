@@ -7,8 +7,10 @@ use tauri::{AppHandle, State};
 
 use crate::{
     envinfo::EnvInfo,
-    gitops, paths, pipeline,
-    service::{self, AppState},
+    gitops,
+    logs::LogPage,
+    paths, pipeline,
+    service::{self, AppState, BusyGuard},
     snapshot::{self, Snapshot},
     util,
 };
@@ -23,25 +25,28 @@ pub struct SyncResult {
     pub behind: u32,
 }
 
-fn busy_guard<'a>(state: &'a AppState, label: &'static str) -> BusyGuard<'a> {
-    state.set_busy(Some(label));
-    BusyGuard(state)
-}
-
-struct BusyGuard<'a>(&'a AppState);
-
-impl Drop for BusyGuard<'_> {
-    fn drop(&mut self) {
-        self.0.set_busy(None);
-    }
-}
-
 #[tauri::command]
 pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<Snapshot, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || Ok(snapshot::build(&state)))
         .await
         .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub fn get_logs(
+    state: State<'_, Arc<AppState>>,
+    after_id: Option<u64>,
+    limit: Option<usize>,
+) -> LogPage {
+    state
+        .logs
+        .page_after(after_id, limit.unwrap_or(2_000).clamp(1, 2_000))
+}
+
+#[tauri::command]
+pub fn clear_logs(state: State<'_, Arc<AppState>>) -> u64 {
+    state.logs.clear()
 }
 
 #[tauri::command]
@@ -52,7 +57,7 @@ pub async fn sync_harness(
     let app = app.clone();
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _busy = busy_guard(&state, "同步");
+        let _busy = BusyGuard::new(&state, &app, "同步");
         let env = state.toolchain();
         if !env.ready {
             return Err(env.problems.join("；"));
@@ -87,13 +92,13 @@ pub async fn update_harness(
         }
 
         let result = {
-            let _busy = busy_guard(&state, "更新");
+            let mut busy = BusyGuard::new(&state, &app, "更新");
             let sync = sync_locked(&app, &state, &env)?;
 
             let harness_dir = paths::harness_dir();
             let head = gitops::head_info(&harness_dir, &env).ok_or("同步后仍无法读取 git HEAD")?;
             if sync.updated || pipeline::needs_build(&harness_dir, &head) {
-                state.set_busy(Some("构建"));
+                busy.set_label("构建");
                 pipeline::install(&harness_dir, &env, &app)
                     .and_then(|()| pipeline::build(&harness_dir, &env, &head, &app))
                     .map_err(|err| err.to_string())?;
@@ -119,12 +124,12 @@ pub(crate) fn ensure_ready(
 ) -> Result<(), String> {
     let harness_dir = paths::harness_dir();
     if !gitops::is_repo(&harness_dir) {
-        let _busy = busy_guard(state, "同步");
+        let _busy = BusyGuard::new(state, app, "同步");
         sync_locked(app, state, env)?;
     }
     let head = gitops::head_info(&harness_dir, env).ok_or("同步后仍无法读取 git HEAD")?;
     if pipeline::needs_build(&harness_dir, &head) {
-        let _busy = busy_guard(state, "构建");
+        let _busy = BusyGuard::new(state, app, "构建");
         pipeline::install(&harness_dir, env, app)
             .and_then(|()| pipeline::build(&harness_dir, env, &head, app))
             .map_err(|err| err.to_string())?;

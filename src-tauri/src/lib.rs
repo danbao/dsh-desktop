@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod envinfo;
 pub mod gitops;
+pub mod logs;
 pub mod paths;
 pub mod pipeline;
 pub mod service;
@@ -30,6 +31,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
+            commands::get_logs,
+            commands::clear_logs,
             commands::sync_harness,
             commands::update_harness,
             commands::start_service,
