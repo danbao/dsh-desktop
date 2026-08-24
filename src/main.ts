@@ -479,9 +479,11 @@ function render(): void {
   $('#app-view').classList.toggle('hidden', !showApp)
   const consoleBtn = $<HTMLButtonElement>('#btn-console')
   const appBtn = $<HTMLButtonElement>('#btn-app')
+  const refreshAppBtn = $<HTMLButtonElement>('#btn-refresh-app')
   consoleBtn.setAttribute('aria-pressed', String(!showApp))
   appBtn.setAttribute('aria-pressed', String(showApp))
   appBtn.disabled = !running
+  refreshAppBtn.disabled = !running
   if (running) {
     const frame = $<HTMLIFrameElement>('#frame')
     if (!frame.src.startsWith('http://127.0.0.1') || !frame.src.includes(`:${service.port}`)) {
@@ -498,6 +500,16 @@ async function run(name: string, args?: Record<string, unknown>): Promise<void> 
     appendLog({ source: 'ui', line: `${name} 失败：${String(err)}` })
   }
   await refresh()
+}
+
+function refreshWorkbench(): void {
+  if (snap?.service.status !== 'running') return
+  const url = new URL(snap.service.url)
+  url.searchParams.set('_dsh_refresh', String(Date.now()))
+  $<HTMLIFrameElement>('#frame').src = url.toString()
+  activeView = 'app'
+  render()
+  toast('工作台已刷新')
 }
 
 let refreshInFlight: Promise<void> | null = null
@@ -772,6 +784,7 @@ function bind(): void {
     activeView = 'app'
     render()
   })
+  $('#btn-refresh-app').addEventListener('click', refreshWorkbench)
 }
 
 async function subscribe(): Promise<void> {
