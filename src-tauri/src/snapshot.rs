@@ -3,18 +3,10 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::{
-    envinfo::EnvInfo,
-    gitops,
-    paths,
-    pipeline,
-    service::AppState,
-    util,
-};
+use crate::{envinfo::EnvInfo, gitops, paths, pipeline, service::AppState, util};
 
 /// Facts about the managed harness checkout.
-#[derive(Debug, Serialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessView {
     pub path: String,
@@ -29,8 +21,7 @@ pub struct HarnessView {
 }
 
 /// Service facts plus the derived loopback URL the UI embeds.
-#[derive(Debug, Serialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceView {
     pub status: String,
@@ -40,8 +31,7 @@ pub struct ServiceView {
 }
 
 /// Full UI state, produced by `get_state` and every transition.
-#[derive(Debug, Serialize)]
-#[derive(Clone)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub harness: HarnessView,
@@ -52,9 +42,9 @@ pub struct Snapshot {
 
 /// Gather a fresh snapshot from disk, git, and shared state.
 pub fn build(state: &AppState) -> Snapshot {
-    let env = EnvInfo::probe();
+    let env = state.toolchain();
     let harness_dir = paths::harness_dir();
-    let head = gitops::head_info(&harness_dir);
+    let head = gitops::head_info(&harness_dir, &env);
     let build_needed = head
         .as_ref()
         .map(|head| pipeline::needs_build(&harness_dir, head))
@@ -103,4 +93,3 @@ pub fn refresh_and_log(app: &AppHandle, state: &AppState, message: &str) {
     util::emit_log(app, "desktop", message);
     publish(app, state);
 }
-

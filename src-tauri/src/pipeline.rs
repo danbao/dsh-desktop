@@ -2,12 +2,11 @@
 //! and stamp the covered commit.
 
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use tauri::AppHandle;
 
-use crate::{envinfo::EnvInfo, gitops, paths, util};
+use crate::{envinfo::EnvInfo, gitops, paths, toolchain::Tool, util};
 
 /// Whether the checkout lacks dependencies, web assets, or a build stamp
 /// covering the current HEAD.
@@ -23,11 +22,7 @@ pub fn needs_build(harness_dir: &Path, head: &gitops::HeadInfo) -> bool {
 
 /// `pnpm install` in the harness tree.
 pub fn install(harness_dir: &Path, env: &EnvInfo, app: &AppHandle) -> anyhow::Result<()> {
-    let pnpm = env
-        .pnpm_bin
-        .clone()
-        .ok_or_else(|| anyhow!("未找到 pnpm"))?;
-    let mut cmd = Command::new(pnpm);
+    let mut cmd = env.command(Tool::Pnpm)?;
     cmd.arg("install").current_dir(harness_dir);
     util::stream_command(&mut cmd, app, "pnpm")
 }
@@ -39,11 +34,7 @@ pub fn build(
     head: &gitops::HeadInfo,
     app: &AppHandle,
 ) -> anyhow::Result<()> {
-    let pnpm = env
-        .pnpm_bin
-        .clone()
-        .ok_or_else(|| anyhow!("未找到 pnpm"))?;
-    let mut cmd = Command::new(pnpm);
+    let mut cmd = env.command(Tool::Pnpm)?;
     cmd.arg("run").arg("build").current_dir(harness_dir);
     util::stream_command(&mut cmd, app, "pnpm")?;
     paths::write_stamp(harness_dir, &head.commit)

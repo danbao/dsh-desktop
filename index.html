@@ -23,8 +23,37 @@
         <section id="console-view">
           <div class="cards">
             <div class="card">
-              <h3>环境</h3>
+              <div class="card-title-row">
+                <h3>环境</h3>
+                <span id="env-ready-dot" class="env-dot" aria-hidden="true"></span>
+              </div>
               <dl id="env-info" class="kv"><dt>检测中…</dt></dl>
+              <div class="card-actions">
+                <button id="btn-refresh-toolchain" class="btn btn-small">重新检测</button>
+                <button id="btn-toggle-toolchain" class="btn btn-small btn-ghost" aria-expanded="false">工具链设置</button>
+              </div>
+              <div id="toolchain-settings" class="toolchain-settings hidden">
+                <p class="settings-hint">留空时自动读取登录 shell 与常见版本管理器。</p>
+                <label class="tool-path-field">
+                  <span>Node 可执行文件</span>
+                  <span class="path-control">
+                    <input id="node-path-input" type="text" placeholder="自动检测" spellcheck="false" />
+                    <button id="btn-pick-node" class="btn btn-small" type="button">选择…</button>
+                  </span>
+                </label>
+                <label class="tool-path-field">
+                  <span>pnpm 可执行文件</span>
+                  <span class="path-control">
+                    <input id="pnpm-path-input" type="text" placeholder="自动检测" spellcheck="false" />
+                    <button id="btn-pick-pnpm" class="btn btn-small" type="button">选择…</button>
+                  </span>
+                </label>
+                <p id="toolchain-running-hint" class="settings-hint hidden">请先停止服务，再保存工具链设置。</p>
+                <div class="settings-actions">
+                  <button id="btn-cancel-toolchain" class="btn btn-small btn-ghost" type="button">取消</button>
+                  <button id="btn-save-toolchain" class="btn btn-small btn-primary" type="button">保存并检测</button>
+                </div>
+              </div>
             </div>
             <div class="card">
               <h3>Harness 内核（deepseek-harness）</h3>

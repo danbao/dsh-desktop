@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context};
 use serde::Serialize;
 use tauri::AppHandle;
 
-use crate::{paths, util};
+use crate::{envinfo::EnvInfo, paths, toolchain::Tool, util};
 
 /// Current HEAD facts shown in the UI.
 #[derive(Debug, Clone, Serialize)]
@@ -19,18 +19,12 @@ pub struct HeadInfo {
     pub commit_date: String,
 }
 
-fn git(dir: &Path) -> Command {
-    let mut cmd = Command::new("git");
+fn git(dir: &Path, env: &EnvInfo) -> anyhow::Result<Command> {
+    let mut cmd = env.command(Tool::Git)?;
     cmd.current_dir(dir);
     // A desktop app must never hang on a credential prompt.
     cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd
-}
-
-fn git_bin() -> anyhow::Result<String> {
-    util::which("git")
-        .map(|p| p.to_string_lossy().into_owned())
-        .ok_or_else(|| anyhow!("未找到 git"))
+    Ok(cmd)
 }
 
 /// Whether `dir` is an existing git work tree.
@@ -40,7 +34,7 @@ pub fn is_repo(dir: &Path) -> bool {
 
 /// Clone the upstream repository shallowly if `dir` is not a repo yet.
 /// Returns `true` when a fresh clone was made.
-pub fn ensure_cloned(dir: &Path, app: &AppHandle) -> anyhow::Result<bool> {
+pub fn ensure_cloned(dir: &Path, app: &AppHandle, env: &EnvInfo) -> anyhow::Result<bool> {
     if is_repo(dir) {
         return Ok(false);
     }
@@ -53,10 +47,13 @@ pub fn ensure_cloned(dir: &Path, app: &AppHandle) -> anyhow::Result<bool> {
     util::emit_log(
         app,
         "git",
-        &format!("克隆 {}（浅克隆，跟随上游默认分支）", paths::HARNESS_REPO_URL),
+        &format!(
+            "克隆 {}（浅克隆，跟随上游默认分支）",
+            paths::HARNESS_REPO_URL
+        ),
     );
     std::fs::create_dir_all(dir.parent().expect("harness dir has a parent"))?;
-    let mut cmd = Command::new(git_bin()?);
+    let mut cmd = env.command(Tool::Git)?;
     // No --branch: track whatever the upstream default branch is.
     cmd.arg("clone")
         .args(["--depth", "1", "--single-branch"])
@@ -69,16 +66,16 @@ pub fn ensure_cloned(dir: &Path, app: &AppHandle) -> anyhow::Result<bool> {
 
 /// Fetch the upstream default branch shallowly, leaving it in `FETCH_HEAD`.
 /// Following HEAD (rather than a pinned name) survives upstream renames.
-pub fn fetch_latest(dir: &Path, app: &AppHandle) -> anyhow::Result<()> {
-    let mut cmd = git(dir);
+pub fn fetch_latest(dir: &Path, app: &AppHandle, env: &EnvInfo) -> anyhow::Result<()> {
+    let mut cmd = git(dir, env)?;
     cmd.args(["fetch", "--depth", "1", "origin"]);
     util::stream_command(&mut cmd, app, "git")
 }
 
 /// Commits on the freshly fetched upstream that HEAD lacks. On shallow clones
 /// any difference collapses to `1`, which the UI reports as "有新版本".
-pub fn behind_count(dir: &Path) -> anyhow::Result<u32> {
-    let output = git(dir)
+pub fn behind_count(dir: &Path, env: &EnvInfo) -> anyhow::Result<u32> {
+    let output = git(dir, env)?
         .args(["rev-list", "--count", "HEAD..FETCH_HEAD"])
         .output()
         .context("无法运行 git rev-list")?;
@@ -97,21 +94,22 @@ pub fn behind_count(dir: &Path) -> anyhow::Result<u32> {
 
 /// Hard-reset HEAD to `FETCH_HEAD` and drop untracked non-ignored files, so a
 /// force-push upstream cannot wedge the managed clone.
-pub fn reset_to_fetch_head(dir: &Path, app: &AppHandle) -> anyhow::Result<()> {
-    let mut reset = git(dir);
+pub fn reset_to_fetch_head(dir: &Path, app: &AppHandle, env: &EnvInfo) -> anyhow::Result<()> {
+    let mut reset = git(dir, env)?;
     reset.args(["reset", "--hard", "FETCH_HEAD"]);
     util::stream_command(&mut reset, app, "git")?;
-    let mut clean = git(dir);
+    let mut clean = git(dir, env)?;
     clean.args(["clean", "-fd"]);
     util::stream_command(&mut clean, app, "git")
 }
 
 /// HEAD facts, or `None` before the first clone.
-pub fn head_info(dir: &Path) -> Option<HeadInfo> {
+pub fn head_info(dir: &Path, env: &EnvInfo) -> Option<HeadInfo> {
     if !is_repo(dir) {
         return None;
     }
-    let output = git(dir)
+    let output = git(dir, env)
+        .ok()?
         .args(["log", "-1", "--format=%H%n%h%n%ci%n%s"])
         .output()
         .ok()?;

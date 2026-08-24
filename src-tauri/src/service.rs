@@ -6,10 +6,10 @@
 //! without racing on the child handle.
 
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -17,8 +17,7 @@ use tauri::{AppHandle, Manager};
 
 use std::sync::atomic::AtomicU32;
 
-use crate::{envinfo::EnvInfo, gitops, paths, pipeline, snapshot, util};
-
+use crate::{envinfo::EnvInfo, gitops, paths, pipeline, snapshot, toolchain::Tool, util};
 
 /// How long the service may take to answer its first healthy probe.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(240);
@@ -75,6 +74,8 @@ pub struct AppState {
     pub service: Mutex<ServiceState>,
     pub last_fetch_behind: Mutex<Option<u32>>,
     pub child: Mutex<Option<RunningService>>,
+    /// One terminal-equivalent environment shared by every child process.
+    pub toolchain: RwLock<EnvInfo>,
 }
 
 /// A spawned service plus everything needed to stop it from anywhere.
@@ -86,13 +87,23 @@ pub struct RunningService {
 
 impl AppState {
     pub fn new() -> Self {
+        let config = paths::load_config().unwrap_or_default();
         Self {
             io: Mutex::new(()),
             busy: Mutex::new(None),
             service: Mutex::new(ServiceState::default()),
             last_fetch_behind: Mutex::new(None),
             child: Mutex::new(None),
+            toolchain: RwLock::new(EnvInfo::discover(&config)),
         }
+    }
+
+    pub fn toolchain(&self) -> EnvInfo {
+        self.toolchain.read().expect("toolchain lock").clone()
+    }
+
+    pub fn set_toolchain(&self, env: EnvInfo) {
+        *self.toolchain.write().expect("toolchain lock") = env;
     }
 
     pub(crate) fn set_service(&self, next: ServiceState) {
@@ -132,7 +143,7 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
     let config = paths::load_config().map_err(|err| err.to_string())?;
     let port = config.port;
     let harness_dir = paths::harness_dir();
-    let Some(head) = gitops::head_info(&harness_dir) else {
+    let Some(head) = gitops::head_info(&harness_dir, env) else {
         return Err("尚未获取 deepseek-harness 代码，请先执行「更新代码并构建」".to_string());
     };
 
@@ -158,20 +169,28 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
         ));
     }
 
-    let node = env.node_bin.clone().ok_or("未找到 node")?;
-    let mut cmd = Command::new(node);
+    let mut cmd = env.command(Tool::Node).map_err(|err| err.to_string())?;
     cmd.args(["--import", "tsx/esm", "apps/cli/src/bin.ts"])
         .arg("--profile")
         .arg("web")
-        .args(["--host", "127.0.0.1", "--port", &port.to_string(), "--no-open"])
+        .args([
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--no-open",
+        ])
         .current_dir(&harness_dir)
-        .env("PATH", util::login_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd.process_group(0);
 
-    util::emit_log(app, "dsh", &format!("启动 dsh --profile web（端口 {port}）"));
+    util::emit_log(
+        app,
+        "dsh",
+        &format!("启动 dsh --profile web（端口 {port}）"),
+    );
     let mut child = cmd.spawn().map_err(|err| format!("无法启动 node：{err}"))?;
     let pgid = child.id();
     let stdout = child.stdout.take().expect("piped stdout");
@@ -182,7 +201,15 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
     let flag_for_thread = Arc::clone(&stop_flag);
     let supervisor_app = app.clone();
     let supervisor = std::thread::spawn(move || {
-        supervise(supervisor_app, child, stdout, stderr, pgid, port, flag_for_thread);
+        supervise(
+            supervisor_app,
+            child,
+            stdout,
+            stderr,
+            pgid,
+            port,
+            flag_for_thread,
+        );
     });
 
     *state.child.lock().expect("child lock") = Some(RunningService {
@@ -268,7 +295,8 @@ fn wait_join(handle: std::thread::JoinHandle<()>, deadline: Instant) -> bool {
         let _ = tx.send(());
     });
     let timeout = deadline.saturating_duration_since(Instant::now());
-    rx.recv_timeout(timeout.max(Duration::from_millis(1))).is_ok()
+    rx.recv_timeout(timeout.max(Duration::from_millis(1)))
+        .is_ok()
 }
 
 /// Owns the child for its whole life: streams output, probes health, reacts
