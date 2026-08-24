@@ -9,7 +9,7 @@ use crate::{
     envinfo::EnvInfo,
     gitops,
     logs::LogPage,
-    paths, pipeline,
+    paths, pipeline, plugins,
     service::{self, AppState, BusyGuard},
     snapshot::{self, Snapshot},
     util,
@@ -264,6 +264,94 @@ pub async fn set_toolchain_config(
         state.set_toolchain(env);
         snapshot::refresh_and_log(&app, &state, "工具链设置已保存并重新检测");
         Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_plugins() -> Result<plugins::PluginCatalog, String> {
+    tauri::async_runtime::spawn_blocking(plugins::list_plugins)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn check_plugin_updates(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<plugins::PluginUpdate>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let env = state.toolchain();
+        if !env.ready {
+            return Err(env.problems.join("；"));
+        }
+        let harness_dir = paths::harness_dir();
+        if !harness_dir.join("node_modules").is_dir() {
+            return Err("请先更新代码并完成 Harness 构建".to_string());
+        }
+        Ok(plugins::check_updates(&harness_dir, &env))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn manage_plugin(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    request: plugins::ManagePluginRequest,
+) -> Result<plugins::ManagePluginResult, String> {
+    let app = app.clone();
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let env = state.toolchain();
+        if !env.ready {
+            return Err(env.problems.join("；"));
+        }
+        let harness_dir = paths::harness_dir();
+        if !gitops::is_repo(&harness_dir) || !harness_dir.join("node_modules").is_dir() {
+            return Err("请先更新代码并完成 Harness 构建".to_string());
+        }
+        plugins::validate_request(&request).map_err(|err| err.to_string())?;
+
+        let was_running = matches!(
+            state.service.lock().expect("service lock").status.as_str(),
+            "running" | "starting"
+        );
+        if was_running {
+            service::stop_service(&app, &state)?;
+        }
+
+        let operation = {
+            let _busy = BusyGuard::new(&state, &app, request.action.busy_label());
+            let _io = state.io.lock().expect("io lock");
+            plugins::run_operation(&harness_dir, &env, &app, &request)
+                .map_err(|err| err.to_string())
+        };
+
+        let restart = if was_running {
+            service::start_service(&app, &state, &env)
+        } else {
+            Ok(())
+        };
+        snapshot::publish(&app, &state);
+
+        match (operation, restart) {
+            (Ok((catalog, message)), Ok(())) => Ok(plugins::ManagePluginResult {
+                catalog,
+                service_restarted: was_running,
+                message,
+            }),
+            (Err(operation_err), Ok(())) => Err(operation_err),
+            (Ok((_catalog, message)), Err(restart_err)) => {
+                Err(format!("{message}，但 Harness 服务恢复失败：{restart_err}"))
+            }
+            (Err(operation_err), Err(restart_err)) => Err(format!(
+                "插件操作失败：{operation_err}；Harness 服务恢复也失败：{restart_err}"
+            )),
+        }
     })
     .await
     .map_err(|err| err.to_string())?

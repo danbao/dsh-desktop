@@ -6,6 +6,7 @@ pub mod gitops;
 pub mod logs;
 pub mod paths;
 pub mod pipeline;
+pub mod plugins;
 pub mod service;
 pub mod snapshot;
 pub mod toolchain;
@@ -70,6 +71,9 @@ pub fn run() {
             commands::set_config,
             commands::refresh_toolchain,
             commands::set_toolchain_config,
+            commands::get_plugins,
+            commands::check_plugin_updates,
+            commands::manage_plugin,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
