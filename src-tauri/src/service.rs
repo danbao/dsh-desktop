@@ -17,7 +17,9 @@ use tauri::{AppHandle, Manager};
 
 use std::sync::atomic::AtomicU32;
 
-use crate::{envinfo::EnvInfo, gitops, paths, pipeline, snapshot, toolchain::Tool, util};
+use crate::{
+    envinfo::EnvInfo, gitops, logs::LogBuffer, paths, pipeline, snapshot, toolchain::Tool, util,
+};
 
 /// How long the service may take to answer its first healthy probe.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(240);
@@ -74,6 +76,8 @@ pub struct AppState {
     pub service: Mutex<ServiceState>,
     pub last_fetch_behind: Mutex<Option<u32>>,
     pub child: Mutex<Option<RunningService>>,
+    /// Complete, non-persistent history for the current application session.
+    pub logs: LogBuffer,
     /// One terminal-equivalent environment shared by every child process.
     pub toolchain: RwLock<EnvInfo>,
 }
@@ -85,6 +89,32 @@ pub struct RunningService {
     pub supervisor: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Publishes every busy-state transition and guarantees cleanup on all exits.
+pub(crate) struct BusyGuard<'a> {
+    state: &'a AppState,
+    app: &'a AppHandle,
+}
+
+impl<'a> BusyGuard<'a> {
+    pub(crate) fn new(state: &'a AppState, app: &'a AppHandle, label: &'static str) -> Self {
+        state.set_busy(Some(label));
+        state.changed(app);
+        Self { state, app }
+    }
+
+    pub(crate) fn set_label(&mut self, label: &'static str) {
+        self.state.set_busy(Some(label));
+        self.state.changed(self.app);
+    }
+}
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.state.set_busy(None);
+        self.state.changed(self.app);
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let config = paths::load_config().unwrap_or_default();
@@ -94,6 +124,7 @@ impl AppState {
             service: Mutex::new(ServiceState::default()),
             last_fetch_behind: Mutex::new(None),
             child: Mutex::new(None),
+            logs: LogBuffer::default(),
             toolchain: RwLock::new(EnvInfo::discover(&config)),
         }
     }
@@ -149,17 +180,18 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
 
     // Stale artifacts are rebuilt right here so 启动 is always sufficient.
     if pipeline::needs_build(&harness_dir, &head) {
-        state.set_busy(Some("构建"));
-        state.set_service(ServiceState {
-            status: "starting".into(),
-            port,
-            error: None,
-        });
-        state.changed(app);
-        util::emit_log(app, "build", "构建产物缺失或过期，自动执行 install/build");
-        let result = pipeline::install(&harness_dir, env, app)
-            .and_then(|()| pipeline::build(&harness_dir, env, &head, app));
-        state.set_busy(None);
+        let result = {
+            let _busy = BusyGuard::new(state, app, "构建");
+            state.set_service(ServiceState {
+                status: "starting".into(),
+                port,
+                error: None,
+            });
+            state.changed(app);
+            util::emit_log(app, "build", "构建产物缺失或过期，自动执行 install/build");
+            pipeline::install(&harness_dir, env, app)
+                .and_then(|()| pipeline::build(&harness_dir, env, &head, app))
+        };
         result.map_err(|err| err.to_string())?;
     }
 
@@ -218,7 +250,6 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
         supervisor: Some(supervisor),
     });
 
-    state.set_busy(None);
     state.set_service(ServiceState {
         status: "starting".into(),
         port,

@@ -3,14 +3,20 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+
+use std::sync::Arc;
+
+use crate::service::AppState;
 
 /// Emit one log line to the UI console (and stderr).
 pub fn emit_log(app: &tauri::AppHandle, source: &str, line: &str) {
-    let _ = app.emit("log", serde_json::json!({ "source": source, "line": line }));
+    let state = app.state::<Arc<AppState>>();
+    let entry = state.logs.push(source, line);
+    let _ = app.emit("log", entry);
     eprintln!("[{source}] {line}");
 }
 
@@ -43,19 +49,44 @@ pub fn stream_command(
         pump_lines(&mut reader, &app_err, &src_err)
     });
 
-    // Keep the tail of each stream for error reporting after the joins below.
-    let status = child.wait()?;
+    let started = Instant::now();
+    let mut next_heartbeat = Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= next_heartbeat {
+            emit_log(
+                app,
+                source,
+                &format!("仍在执行（已用时 {}）", format_elapsed(elapsed)),
+            );
+            next_heartbeat += Duration::from_secs(15);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
     t_out.join().expect("stdout reader");
     t_err.join().expect("stderr reader");
 
     if !status.success() {
         return Err(anyhow!(
-            "{} 退出码 {}（详情见日志）",
+            "{} 退出码 {}（用时 {}，详情见日志）",
             source,
-            status.code().unwrap_or(-1)
+            status.code().unwrap_or(-1),
+            format_elapsed(started.elapsed()),
         ));
     }
     Ok(())
+}
+
+pub(crate) fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 60 {
+        format!("{seconds} 秒")
+    } else {
+        format!("{} 分 {} 秒", seconds / 60, seconds % 60)
+    }
 }
 
 /// Pump one subprocess stream into the log, line by line.
@@ -103,5 +134,19 @@ pub fn port_free(port: u16) -> bool {
 pub fn kill_group(pgid: u32, sig: i32) {
     unsafe {
         libc::kill(-(pgid as i32), sig);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_elapsed;
+    use std::time::Duration;
+
+    #[test]
+    fn formats_command_elapsed_time_for_progress_logs() {
+        assert_eq!(format_elapsed(Duration::from_secs(0)), "0 秒");
+        assert_eq!(format_elapsed(Duration::from_secs(59)), "59 秒");
+        assert_eq!(format_elapsed(Duration::from_secs(61)), "1 分 1 秒");
+        assert_eq!(format_elapsed(Duration::from_secs(3_605)), "60 分 5 秒");
     }
 }

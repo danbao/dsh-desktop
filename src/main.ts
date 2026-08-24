@@ -48,6 +48,22 @@ interface LogLine {
   line: string
 }
 
+interface BackendLogEntry extends LogLine {
+  id: number
+  timestampMs: number
+}
+
+interface LogPage {
+  entries: BackendLogEntry[]
+  hasMore: boolean
+}
+
+interface DisplayLog extends LogLine {
+  backendId: number | null
+  localId: number | null
+  timestampMs: number
+}
+
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel)
   if (el === null) throw new Error(`missing element ${sel}`)
@@ -55,25 +71,117 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
 }
 
 let snap: Snapshot | null = null
-let logCount = 0
 let toolchainSaving = false
-const LOG_CAP = 4000
+const LOG_CHUNK_SIZE = 250
+const LOG_PAGE_SIZE = 2000
+let logEntries: DisplayLog[] = []
+let backendLogIds = new Set<number>()
+let clearedBackendThrough = 0
+let localLogId = 0
+let logHydrating = true
+let currentLogChunk: HTMLPreElement | null = null
+let currentLogChunkSize = 0
 
 function appendLog(entry: LogLine): void {
+  const displayEntry: DisplayLog = {
+    ...entry,
+    backendId: null,
+    localId: ++localLogId,
+    timestampMs: Date.now(),
+  }
+  logEntries.push(displayEntry)
+  if (!logHydrating) appendRenderedLog(displayEntry)
+}
+
+function acceptBackendLog(entry: BackendLogEntry): void {
+  if (entry.id <= clearedBackendThrough || backendLogIds.has(entry.id)) return
+  backendLogIds.add(entry.id)
+  const displayEntry: DisplayLog = {
+    source: entry.source,
+    line: entry.line,
+    backendId: entry.id,
+    localId: null,
+    timestampMs: entry.timestampMs,
+  }
+  logEntries.push(displayEntry)
+  if (!logHydrating) appendRenderedLog(displayEntry)
+}
+
+function formatLog(entry: DisplayLog): string {
+  const time = new Date(entry.timestampMs).toLocaleTimeString('zh-CN', { hour12: false })
+  return `[${time}] [${entry.source}] ${entry.line}\n`
+}
+
+function appendRenderedLog(entry: DisplayLog): void {
   const pane = $('#log-pane')
   const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 8
-  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  const row = document.createTextNode(`[${time}] [${entry.source}] ${entry.line}\n`)
-  pane.appendChild(row)
-  logCount += 1
-  if (logCount > LOG_CAP) {
-    // Trim from the front; text nodes hold one line each.
-    for (let i = 0; i < 500; i += 1) {
-      pane.firstChild?.remove()
-    }
-    logCount -= 500
+  if (currentLogChunk === null || currentLogChunkSize >= LOG_CHUNK_SIZE) {
+    currentLogChunk = document.createElement('pre')
+    currentLogChunk.className = 'log-chunk'
+    currentLogChunk.appendChild(document.createTextNode(''))
+    pane.appendChild(currentLogChunk)
+    currentLogChunkSize = 0
   }
+  const chunkText = currentLogChunk.firstChild as Text
+  chunkText.appendData(formatLog(entry))
+  currentLogChunkSize += 1
   if (atBottom) pane.scrollTop = pane.scrollHeight
+}
+
+function renderAllLogs(): void {
+  const pane = $('#log-pane')
+  const fragment = document.createDocumentFragment()
+  for (let start = 0; start < logEntries.length; start += LOG_CHUNK_SIZE) {
+    const chunkEntries = logEntries.slice(start, start + LOG_CHUNK_SIZE)
+    const chunk = document.createElement('pre')
+    chunk.className = 'log-chunk'
+    chunk.textContent = chunkEntries.map(formatLog).join('')
+    fragment.appendChild(chunk)
+  }
+  pane.replaceChildren(fragment)
+  currentLogChunk = pane.lastElementChild as HTMLPreElement | null
+  currentLogChunkSize = logEntries.length % LOG_CHUNK_SIZE
+  if (currentLogChunk !== null && currentLogChunkSize === 0) {
+    currentLogChunkSize = LOG_CHUNK_SIZE
+  }
+  pane.scrollTop = pane.scrollHeight
+}
+
+async function hydrateLogs(): Promise<void> {
+  let afterId: number | undefined
+  try {
+    while (true) {
+      const page = await invoke<LogPage>('get_logs', { afterId, limit: LOG_PAGE_SIZE })
+      for (const entry of page.entries) acceptBackendLog(entry)
+      if (!page.hasMore || page.entries.length === 0) break
+      afterId = page.entries[page.entries.length - 1]?.id
+    }
+  } finally {
+    logEntries.sort((left, right) => {
+      if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs
+      return (left.backendId ?? Number.MAX_SAFE_INTEGER) - (right.backendId ?? Number.MAX_SAFE_INTEGER)
+    })
+    logHydrating = false
+    renderAllLogs()
+  }
+}
+
+async function clearLogs(): Promise<void> {
+  const localCutoff = localLogId
+  try {
+    const backendCutoff = await invoke<number>('clear_logs')
+    clearedBackendThrough = Math.max(clearedBackendThrough, backendCutoff)
+    logEntries = logEntries.filter((entry) =>
+      entry.backendId !== null ? entry.backendId > backendCutoff : (entry.localId ?? 0) > localCutoff,
+    )
+    backendLogIds = new Set(
+      logEntries.flatMap((entry) => (entry.backendId === null ? [] : [entry.backendId])),
+    )
+    renderAllLogs()
+  } catch (err) {
+    toast(`清空日志失败：${String(err)}`, true)
+    appendLog({ source: 'ui', line: `清空日志失败：${String(err)}` })
+  }
 }
 
 function toast(message: string, isError = false): void {
@@ -193,7 +301,9 @@ async function run(name: string, args?: Record<string, unknown>): Promise<void> 
   await refresh()
 }
 
-async function refresh(): Promise<void> {
+let refreshInFlight: Promise<void> | null = null
+
+async function refreshOnce(): Promise<void> {
   try {
     snap = await invoke<Snapshot>('get_state')
   } catch (err) {
@@ -201,6 +311,15 @@ async function refresh(): Promise<void> {
     return
   }
   render()
+}
+
+function refresh(): Promise<void> {
+  if (refreshInFlight !== null) return refreshInFlight
+  const request = refreshOnce().finally(() => {
+    if (refreshInFlight === request) refreshInFlight = null
+  })
+  refreshInFlight = request
+  return request
 }
 
 function showToolchainSettings(show: boolean): void {
@@ -334,10 +453,7 @@ function bind(): void {
     await run('set_config', { port })
     toast('端口已保存')
   })
-  $('#btn-clear-log').addEventListener('click', () => {
-    $('#log-pane').textContent = ''
-    logCount = 0
-  })
+  $('#btn-clear-log').addEventListener('click', () => void clearLogs())
   $('#btn-console').addEventListener('click', () => {
     $('#app-view').classList.add('hidden')
     $('#console-view').classList.remove('hidden')
@@ -353,18 +469,27 @@ function bind(): void {
 }
 
 async function subscribe(): Promise<void> {
-  await listen<LogLine>('log', (event) => appendLog(event.payload))
+  await listen<BackendLogEntry>('log', (event) => acceptBackendLog(event.payload))
   await listen<Snapshot>('state-changed', (event) => {
     snap = event.payload
     render()
   })
 }
 
-void subscribe()
-bind()
-void refresh()
+async function initialize(): Promise<void> {
+  bind()
+  await subscribe()
+  await hydrateLogs()
+  await refresh()
+}
 
-// Poll while a service is starting so the UI flips to the app view promptly.
+void initialize().catch((err) => {
+  logHydrating = false
+  appendLog({ source: 'ui', line: `初始化失败：${String(err)}` })
+  toast(`初始化失败：${String(err)}`, true)
+})
+
+// Events provide immediate updates; polling repairs a missed busy/start event.
 window.setInterval(() => {
-  if (snap?.service.status === 'starting') void refresh()
+  if (snap !== null && (snap.busy !== null || snap.service.status === 'starting')) void refresh()
 }, 1000)
