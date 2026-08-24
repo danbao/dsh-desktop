@@ -7,9 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     envinfo::EnvInfo,
-    gitops,
-    paths,
-    pipeline,
+    gitops, paths, pipeline,
     service::{self, AppState},
     snapshot::{self, Snapshot},
     util,
@@ -55,7 +53,11 @@ pub async fn sync_harness(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _busy = busy_guard(&state, "同步");
-        sync_locked(&app, &state)
+        let env = state.toolchain();
+        if !env.ready {
+            return Err(env.problems.join("；"));
+        }
+        sync_locked(&app, &state, &env)
     })
     .await
     .map_err(|err| err.to_string())?
@@ -70,7 +72,7 @@ pub async fn update_harness(
     let app = app.clone();
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let env = EnvInfo::probe();
+        let env = state.toolchain();
         if !env.ready {
             return Err(env.problems.join("；"));
         }
@@ -86,11 +88,10 @@ pub async fn update_harness(
 
         let result = {
             let _busy = busy_guard(&state, "更新");
-            let sync = sync_locked(&app, &state)?;
+            let sync = sync_locked(&app, &state, &env)?;
 
             let harness_dir = paths::harness_dir();
-            let head = gitops::head_info(&harness_dir)
-                .ok_or("同步后仍无法读取 git HEAD")?;
+            let head = gitops::head_info(&harness_dir, &env).ok_or("同步后仍无法读取 git HEAD")?;
             if sync.updated || pipeline::needs_build(&harness_dir, &head) {
                 state.set_busy(Some("构建"));
                 pipeline::install(&harness_dir, &env, &app)
@@ -119,10 +120,9 @@ pub(crate) fn ensure_ready(
     let harness_dir = paths::harness_dir();
     if !gitops::is_repo(&harness_dir) {
         let _busy = busy_guard(state, "同步");
-        sync_locked(app, state)?;
+        sync_locked(app, state, env)?;
     }
-    let head =
-        gitops::head_info(&harness_dir).ok_or("同步后仍无法读取 git HEAD")?;
+    let head = gitops::head_info(&harness_dir, env).ok_or("同步后仍无法读取 git HEAD")?;
     if pipeline::needs_build(&harness_dir, &head) {
         let _busy = busy_guard(state, "构建");
         pipeline::install(&harness_dir, env, app)
@@ -132,17 +132,20 @@ pub(crate) fn ensure_ready(
     Ok(())
 }
 
-
 /// Shared sync core: clone when missing, fetch, reset when upstream moved.
 /// Callers hold the busy label; this takes the io lock itself.
-fn sync_locked(app: &AppHandle, state: &Arc<AppState>) -> Result<SyncResult, String> {
+fn sync_locked(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    env: &EnvInfo,
+) -> Result<SyncResult, String> {
     let _io = state.io.lock().expect("io lock");
     let harness_dir = paths::harness_dir();
 
-    let cloned = gitops::ensure_cloned(&harness_dir, app).map_err(|err| err.to_string())?;
+    let cloned = gitops::ensure_cloned(&harness_dir, app, env).map_err(|err| err.to_string())?;
     if cloned {
         *state.last_fetch_behind.lock().expect("behind lock") = Some(0);
-        let head = gitops::head_info(&harness_dir);
+        let head = gitops::head_info(&harness_dir, env);
         snapshot::publish(app, state);
         return Ok(SyncResult {
             updated: true,
@@ -151,15 +154,15 @@ fn sync_locked(app: &AppHandle, state: &Arc<AppState>) -> Result<SyncResult, Str
         });
     }
 
-    gitops::fetch_latest(&harness_dir, app).map_err(|err| err.to_string())?;
-    let behind = gitops::behind_count(&harness_dir).map_err(|err| err.to_string())?;
+    gitops::fetch_latest(&harness_dir, app, env).map_err(|err| err.to_string())?;
+    let behind = gitops::behind_count(&harness_dir, env).map_err(|err| err.to_string())?;
     *state.last_fetch_behind.lock().expect("behind lock") = Some(behind);
 
     let updated = behind > 0;
     if updated {
-        gitops::reset_to_fetch_head(&harness_dir, app).map_err(|err| err.to_string())?;
+        gitops::reset_to_fetch_head(&harness_dir, app, env).map_err(|err| err.to_string())?;
     }
-    let head = gitops::head_info(&harness_dir);
+    let head = gitops::head_info(&harness_dir, env);
     snapshot::publish(app, state);
     Ok(SyncResult {
         updated,
@@ -169,14 +172,11 @@ fn sync_locked(app: &AppHandle, state: &Arc<AppState>) -> Result<SyncResult, Str
 }
 
 #[tauri::command]
-pub async fn start_service(
-    app: AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+pub async fn start_service(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let app = app.clone();
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let env = EnvInfo::probe();
+        let env = state.toolchain();
         service::start_service(&app, &state, &env)
     })
     .await
@@ -184,10 +184,7 @@ pub async fn start_service(
 }
 
 #[tauri::command]
-pub async fn stop_service(
-    app: AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+pub async fn stop_service(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let app = app.clone();
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || service::stop_service(&app, &state))
@@ -205,6 +202,62 @@ pub async fn set_config(app: AppHandle, port: u16) -> Result<(), String> {
         config.port = port;
         paths::save_config(&config).map_err(|err| err.to_string())?;
         util::emit_log(&app, "desktop", &format!("端口已改为 {port}"));
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn refresh_toolchain(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _io = state.io.lock().expect("io lock");
+        let config = paths::load_config().map_err(|err| err.to_string())?;
+        let env = EnvInfo::discover(&config);
+        let summary = if env.ready {
+            "工具链重新检测完成".to_string()
+        } else {
+            format!("工具链重新检测完成：{}", env.problems.join("；"))
+        };
+        state.set_toolchain(env);
+        snapshot::refresh_and_log(&app, &state, &summary);
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_toolchain_config(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    node_path: Option<String>,
+    pnpm_path: Option<String>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _io = state.io.lock().expect("io lock");
+        if state.service.lock().expect("service lock").status != "stopped" {
+            return Err("请先停止服务，再修改工具链设置".to_string());
+        }
+        let normalize = |value: Option<String>| {
+            value.and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
+        };
+        let mut config = paths::load_config().map_err(|err| err.to_string())?;
+        config.node_path = normalize(node_path);
+        config.pnpm_path = normalize(pnpm_path);
+        let env = EnvInfo::discover(&config);
+        env.validate_overrides()?;
+        paths::save_config(&config).map_err(|err| err.to_string())?;
+        state.set_toolchain(env);
+        snapshot::refresh_and_log(&app, &state, "工具链设置已保存并重新检测");
         Ok(())
     })
     .await

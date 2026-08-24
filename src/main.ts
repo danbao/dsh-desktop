@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import { open } from '@tauri-apps/plugin-dialog'
 
 /** Snapshot of everything the UI renders, produced by the Rust `get_state`. */
 interface Snapshot {
@@ -20,6 +21,16 @@ interface Snapshot {
     nodeVersion: string | null
     pnpmVersion: string | null
     gitVersion: string | null
+    nodeBin: string | null
+    pnpmBin: string | null
+    gitBin: string | null
+    nodeSource: string | null
+    pnpmSource: string | null
+    gitSource: string | null
+    shell: string | null
+    discoveryNotes: string[]
+    configuredNodePath: string | null
+    configuredPnpmPath: string | null
     ready: boolean
     problems: string[]
   }
@@ -45,6 +56,7 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
 
 let snap: Snapshot | null = null
 let logCount = 0
+let toolchainSaving = false
 const LOG_CAP = 4000
 
 function appendLog(entry: LogLine): void {
@@ -106,10 +118,15 @@ function render(): void {
 
   $('#env-info').innerHTML = kv([
     ['Node', env.nodeVersion ?? '未找到'],
+    ...(env.nodeBin !== null ? ([['Node 来源', `${env.nodeSource ?? '自动'} → ${env.nodeBin}`]] as Array<[string, string]>) : []),
     ['pnpm', env.pnpmVersion ?? '未找到'],
+    ...(env.pnpmBin !== null ? ([['pnpm 来源', `${env.pnpmSource ?? '自动'} → ${env.pnpmBin}`]] as Array<[string, string]>) : []),
     ['git', env.gitVersion ?? '未找到'],
+    ['登录 shell', env.shell ?? '未知'],
+    ...(env.discoveryNotes.length > 0 ? ([['检测说明', env.discoveryNotes.join('；')]] as Array<[string, string]>) : []),
     ...(env.problems.length > 0 ? ([['问题', env.problems.join('；')]] as Array<[string, string]>) : []),
   ])
+  $('#env-ready-dot').className = `env-dot ${env.ready ? 'ready' : 'problem'}`
 
   $('#harness-info').innerHTML = harness.present
     ? kv([
@@ -136,6 +153,10 @@ function render(): void {
   const updateBtn = $<HTMLButtonElement>('#btn-update')
   const restartBtn = $<HTMLButtonElement>('#btn-update-restart')
   const savePortBtn = $<HTMLButtonElement>('#btn-save-port')
+  const refreshToolchainBtn = $<HTMLButtonElement>('#btn-refresh-toolchain')
+  const saveToolchainBtn = $<HTMLButtonElement>('#btn-save-toolchain')
+  const pickNodeBtn = $<HTMLButtonElement>('#btn-pick-node')
+  const pickPnpmBtn = $<HTMLButtonElement>('#btn-pick-pnpm')
   const running = service.status === 'running'
   startBtn.disabled = !env.ready || !harness.present || busy !== null || running
   stopBtn.disabled = busy !== null || service.status === 'stopped'
@@ -143,6 +164,11 @@ function render(): void {
   updateBtn.disabled = busy !== null || !env.ready
   restartBtn.disabled = busy !== null || !env.ready || !harness.present
   savePortBtn.disabled = busy !== null || service.status !== 'stopped'
+  refreshToolchainBtn.disabled = busy !== null || toolchainSaving
+  saveToolchainBtn.disabled = busy !== null || running || service.status === 'starting' || toolchainSaving
+  pickNodeBtn.disabled = running || service.status === 'starting' || toolchainSaving
+  pickPnpmBtn.disabled = running || service.status === 'starting' || toolchainSaving
+  $('#toolchain-running-hint').classList.toggle('hidden', service.status === 'stopped')
 
   const showApp = running && !$('#app-view').classList.contains('hidden')
   $('#console-view').classList.toggle('hidden', showApp)
@@ -175,6 +201,60 @@ async function refresh(): Promise<void> {
     return
   }
   render()
+}
+
+function showToolchainSettings(show: boolean): void {
+  const panel = $('#toolchain-settings')
+  panel.classList.toggle('hidden', !show)
+  const toggle = $<HTMLButtonElement>('#btn-toggle-toolchain')
+  toggle.setAttribute('aria-expanded', String(show))
+  toggle.textContent = show ? '收起设置' : '工具链设置'
+  if (show && snap !== null) {
+    $<HTMLInputElement>('#node-path-input').value = snap.env.configuredNodePath ?? ''
+    $<HTMLInputElement>('#pnpm-path-input').value = snap.env.configuredPnpmPath ?? ''
+  }
+}
+
+async function pickExecutable(inputSelector: string, title: string): Promise<void> {
+  try {
+    const selected = await open({ multiple: false, directory: false, title })
+    if (typeof selected === 'string') {
+      $<HTMLInputElement>(inputSelector).value = selected
+    }
+  } catch (err) {
+    toast(`选择文件失败：${String(err)}`, true)
+  }
+}
+
+async function saveToolchain(): Promise<void> {
+  if (toolchainSaving) return
+  toolchainSaving = true
+  render()
+  try {
+    const nodePath = $<HTMLInputElement>('#node-path-input').value.trim() || null
+    const pnpmPath = $<HTMLInputElement>('#pnpm-path-input').value.trim() || null
+    await invoke('set_toolchain_config', { nodePath, pnpmPath })
+    await refresh()
+    showToolchainSettings(false)
+    toast('工具链设置已保存并重新检测')
+  } catch (err) {
+    toast(`保存工具链失败：${String(err)}`, true)
+    appendLog({ source: 'ui', line: `保存工具链失败：${String(err)}` })
+  } finally {
+    toolchainSaving = false
+    render()
+  }
+}
+
+async function refreshToolchain(): Promise<void> {
+  try {
+    await invoke('refresh_toolchain')
+    await refresh()
+    toast(snap?.env.ready === true ? '工具链检测完成' : '工具链检测完成，请查看环境问题', snap?.env.ready !== true)
+  } catch (err) {
+    toast(`重新检测失败：${String(err)}`, true)
+    appendLog({ source: 'ui', line: `重新检测失败：${String(err)}` })
+  }
 }
 
 async function syncOnly(): Promise<void> {
@@ -235,6 +315,14 @@ function bind(): void {
   $('#btn-update').addEventListener('click', () => void update(false))
   $('#btn-update-restart').addEventListener('click', () => void update(true))
   $('#btn-check-update').addEventListener('click', () => void checkAppUpdate())
+  $('#btn-refresh-toolchain').addEventListener('click', () => void refreshToolchain())
+  $('#btn-toggle-toolchain').addEventListener('click', () => {
+    showToolchainSettings($('#toolchain-settings').classList.contains('hidden'))
+  })
+  $('#btn-cancel-toolchain').addEventListener('click', () => showToolchainSettings(false))
+  $('#btn-save-toolchain').addEventListener('click', () => void saveToolchain())
+  $('#btn-pick-node').addEventListener('click', () => void pickExecutable('#node-path-input', '选择 Node 可执行文件'))
+  $('#btn-pick-pnpm').addEventListener('click', () => void pickExecutable('#pnpm-path-input', '选择 pnpm 可执行文件'))
   $('#btn-start').addEventListener('click', () => void run('start_service'))
   $('#btn-stop').addEventListener('click', () => void run('stop_service'))
   $('#btn-save-port').addEventListener('click', async () => {

@@ -18,6 +18,11 @@ pub struct Config {
     /// Launch the service automatically when the app starts.
     #[serde(default = "default_true")]
     pub autostart: bool,
+    /// Optional executable overrides. Missing values keep automatic discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnpm_path: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -29,6 +34,8 @@ impl Default for Config {
         Self {
             port: 3080,
             autostart: true,
+            node_path: None,
+            pnpm_path: None,
         }
     }
 }
@@ -79,7 +86,10 @@ pub fn save_config(config: &Config) -> anyhow::Result<()> {
 /// Stamps live in the app data dir (never inside the harness tree, which may
 /// be the user's own working copy), keyed by a stable hash of the path.
 pub fn stamp_path(harness_dir: &std::path::Path) -> PathBuf {
-    let key = format!("build-{:016x}.json", stable_hash(&harness_dir.to_string_lossy()));
+    let key = format!(
+        "build-{:016x}.json",
+        stable_hash(&harness_dir.to_string_lossy())
+    );
     let dir = app_dir().join("state");
     let _ = fs::create_dir_all(&dir);
     dir.join(key)
@@ -95,6 +105,21 @@ fn stable_hash(text: &str) -> u64 {
     hash
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_without_tool_paths_remains_compatible() {
+        let config: Config =
+            serde_json::from_str(r#"{"port":3088,"autostart":false}"#).expect("legacy config");
+        assert_eq!(config.port, 3088);
+        assert!(!config.autostart);
+        assert_eq!(config.node_path, None);
+        assert_eq!(config.pnpm_path, None);
+    }
+}
+
 /// Commit recorded by the last successful build, if any.
 pub fn stamp_commit(harness_dir: &std::path::Path) -> Option<String> {
     let text = fs::read_to_string(stamp_path(harness_dir)).ok()?;
@@ -102,7 +127,9 @@ pub fn stamp_commit(harness_dir: &std::path::Path) -> Option<String> {
     struct Stamp {
         commit: String,
     }
-    serde_json::from_str::<Stamp>(&text).ok().map(|stamp| stamp.commit)
+    serde_json::from_str::<Stamp>(&text)
+        .ok()
+        .map(|stamp| stamp.commit)
 }
 
 /// Record the commit the just-finished build covers.

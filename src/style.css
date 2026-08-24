@@ -112,6 +112,35 @@ body {
   font-weight: 600;
 }
 
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.card-title-row h3 {
+  margin-right: auto;
+}
+
+.env-dot {
+  width: 7px;
+  height: 7px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  box-shadow: 0 0 0 3px rgba(138, 146, 166, 0.1);
+}
+
+.env-dot.ready {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(47, 191, 113, 0.12);
+}
+
+.env-dot.problem {
+  background: var(--err);
+  box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.12);
+}
+
 .kv {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -195,6 +224,57 @@ body {
   border-radius: 6px;
   padding: 5px 8px;
   font-size: 12.5px;
+}
+
+.toolchain-settings {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-hint {
+  margin: 0 0 9px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.tool-path-field {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.path-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.path-control input {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 5px 8px;
+  font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+}
+
+.path-control input:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid rgba(77, 107, 254, 0.7);
+  outline-offset: 2px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 11px;
 }
 
 .log-wrap {

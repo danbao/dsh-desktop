@@ -16,7 +16,7 @@
 
 - macOS（开发与打包均在 macOS 完成）
 - [Rust](https://rustup.rs/) 与 Xcode Command Line Tools
-- Node.js `>=24` 与 pnpm（构建 harness 内核用）
+- Node.js `>=24` 与 pnpm（构建 harness 内核用；支持 NVM、fnm、Volta、asdf/mise 与 Homebrew 自动发现）
 - 首次克隆需要网络
 
 ## 数据目录
@@ -74,7 +74,7 @@ Rust 后端 (src-tauri/src)
 
 要点：
 
-- GUI 不继承 shell 的 PATH，启动时经用户登录 shell 解析一次 PATH，所有子进程使用该结果定位 node/pnpm/git。
+- GUI 不继承终端的 PATH。应用会合并继承环境、用户登录/交互 shell（zsh、bash、fish 等）和常见版本管理器目录，验证后让所有子进程共享同一工具链环境；自动检测失败时可在环境卡中分别指定 Node 与 pnpm。
 - 服务以 `process_group(0)` 启动，停止与清理都作用于整个进程组。
 - 构建标记存在应用数据目录而非 harness 树内，避免污染用户工作区。
 

@@ -1,59 +1,12 @@
-//! Shared helpers: login-shell PATH resolution, executable lookup, streamed
-//! subprocess runs, and loopback HTTP probes.
-//!
-//! GUI apps on macOS do not inherit a shell PATH, so every child process uses
-//! the PATH resolved once from the user's login shell.
+//! Shared helpers for streamed subprocesses and loopback HTTP probes.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use tauri::Emitter;
-
-/// The user's login-shell `PATH`, resolved once per app run. Falls back to the
-/// inherited `PATH` when no usable login shell exists.
-pub fn login_path() -> &'static str {
-    static LOGIN_PATH: OnceLock<String> = OnceLock::new();
-    LOGIN_PATH.get_or_init(|| {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-        let from_shell = Command::new(&shell)
-            .arg("-lc")
-            .arg("echo $PATH")
-            .output()
-            .ok()
-            .filter(|out| out.status.success())
-            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-            .filter(|path| !path.is_empty());
-        from_shell.unwrap_or_else(|| std::env::var("PATH").unwrap_or_default())
-    })
-}
-
-/// Find an executable by name on the resolved login-shell PATH.
-pub fn which(name: &str) -> Option<PathBuf> {
-    for dir in login_path().split(':') {
-        if dir.is_empty() {
-            continue;
-        }
-        let candidate = Path::new(dir).join(name);
-        if is_executable(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_file() && {
-        path.metadata()
-            .map(|meta| meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-}
 
 /// Emit one log line to the UI console (and stderr).
 pub fn emit_log(app: &tauri::AppHandle, source: &str, line: &str) {
@@ -68,10 +21,6 @@ pub fn stream_command(
     app: &tauri::AppHandle,
     source: &str,
 ) -> anyhow::Result<()> {
-    // Children need the login-shell PATH: toolchain shims such as corepack's
-    // pnpm resolve `node` through `#!/usr/bin/env node`, which fails on the
-    // minimal PATH a GUI app inherits.
-    cmd.env("PATH", login_path());
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
@@ -132,7 +81,9 @@ pub fn http_ok(port: u16) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else {
         return false;
     };
-    let request = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+    let request = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
