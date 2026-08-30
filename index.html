@@ -14,8 +14,7 @@
         </div>
         <span id="status-pill" class="pill pill-idle">加载中…</span>
         <div class="spacer"></div>
-        <button id="btn-console" class="btn btn-ghost btn-nav" aria-pressed="true">控制台</button>
-        <button id="btn-app" class="btn btn-ghost btn-nav" aria-pressed="false" disabled>工作台</button>
+        <button id="btn-app" class="btn btn-ghost" aria-pressed="false" disabled>打开工作台</button>
         <button id="btn-refresh-app" class="btn btn-ghost" aria-label="刷新工作台" disabled>↻ 刷新工作台</button>
         <button id="btn-check-update" class="btn btn-ghost">检查更新</button>
       </header>
@@ -121,10 +120,6 @@
             </div>
             <div id="log-pane" class="log-pane" role="log" aria-live="off"></div>
           </div>
-        </section>
-        <!-- Embedded harness web UI -->
-        <section id="app-view" class="hidden">
-          <iframe id="frame" title="DeepSeek Harness"></iframe>
         </section>
       </main>
       <div id="toast" class="toast hidden"></div>

@@ -102,8 +102,6 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
 let snap: Snapshot | null = null
 let logStick = true
 let toolchainSaving = false
-let activeView: 'console' | 'app' = 'console'
-let previousServiceStatus: Snapshot['service']['status'] | null = null
 let pluginCatalog: PluginCatalog | null = null
 let pluginUpdates = new Map<string, PluginUpdate>()
 let pluginPanelOpen = false
@@ -112,7 +110,6 @@ let pluginChecking = false
 let pluginOperation = false
 let pluginUpdatesChecked = false
 let pluginError: string | null = null
-let keepConsoleDuringServiceTransition = false
 const LOG_CHUNK_SIZE = 250
 const LOG_PAGE_SIZE = 2000
 let logEntries: DisplayLog[] = []
@@ -542,30 +539,16 @@ function render(): void {
 
   const consoleWasHidden = $('#console-view').classList.contains('hidden')
 
-  if (running && previousServiceStatus !== 'running' && !keepConsoleDuringServiceTransition) {
-    activeView = 'app'
-  } else if (!running) {
-    activeView = 'console'
-  }
-  previousServiceStatus = service.status
-
-  const showApp = running && activeView === 'app'
-  $('#console-view').classList.toggle('hidden', showApp)
-  $('#app-view').classList.toggle('hidden', !showApp)
-  const consoleBtn = $<HTMLButtonElement>('#btn-console')
+  // The workbench lives in its own native window (open_workbench): the
+  // harness's SameSite=Strict cookie can never reach a tauri:// iframe.
+  // This window stays on the console at all times.
+  $('#console-view').classList.remove('hidden')
   const appBtn = $<HTMLButtonElement>('#btn-app')
   const refreshAppBtn = $<HTMLButtonElement>('#btn-refresh-app')
-  consoleBtn.setAttribute('aria-pressed', String(!showApp))
-  appBtn.setAttribute('aria-pressed', String(showApp))
+  appBtn.setAttribute('aria-pressed', 'false')
   appBtn.disabled = !running
   refreshAppBtn.disabled = !running
-  if (consoleWasHidden && !showApp) restickLog()
-  if (running) {
-    const frame = $<HTMLIFrameElement>('#frame')
-    if (!frame.src.startsWith('http://127.0.0.1') || !frame.src.includes(`:${service.port}`)) {
-      frame.src = service.url
-    }
-  }
+  if (consoleWasHidden) restickLog()
 }
 
 async function run(name: string, args?: Record<string, unknown>): Promise<void> {
@@ -578,14 +561,25 @@ async function run(name: string, args?: Record<string, unknown>): Promise<void> 
   await refresh()
 }
 
-function refreshWorkbench(): void {
+async function openWorkbench(): Promise<void> {
   if (snap?.service.status !== 'running') return
-  const url = new URL(snap.service.url)
-  url.searchParams.set('_dsh_refresh', String(Date.now()))
-  $<HTMLIFrameElement>('#frame').src = url.toString()
-  activeView = 'app'
-  render()
-  toast('工作台已刷新')
+  try {
+    await invoke('open_workbench')
+  } catch (err) {
+    toast(`打开工作台失败：${String(err)}`, true)
+    appendLog({ source: 'ui', line: `打开工作台失败：${String(err)}` })
+  }
+}
+
+async function refreshWorkbench(): Promise<void> {
+  if (snap?.service.status !== 'running') return
+  try {
+    // The workbench window reloads the tokenized URL, picking up fresh code.
+    await invoke('open_workbench')
+    toast('工作台已刷新')
+  } catch (err) {
+    toast(`刷新工作台失败：${String(err)}`, true)
+  }
 }
 
 let refreshInFlight: Promise<void> | null = null
@@ -720,8 +714,6 @@ async function setPluginPanel(show: boolean): Promise<void> {
 async function managePlugin(action: PluginAction, packageSpec: string): Promise<void> {
   if (pluginOperation || pluginActionsDisabled()) return
   pluginOperation = true
-  keepConsoleDuringServiceTransition = true
-  activeView = 'console'
   render()
   try {
     const result = await invoke<ManagePluginResult>('manage_plugin', {
@@ -743,8 +735,6 @@ async function managePlugin(action: PluginAction, packageSpec: string): Promise<
   } finally {
     await refresh()
     pluginOperation = false
-    keepConsoleDuringServiceTransition = false
-    activeView = 'console'
     render()
   }
   void checkPluginUpdates()
@@ -852,16 +842,8 @@ function bind(): void {
   })
   $('#btn-copy-log').addEventListener('click', () => void copyAllLogs())
   $('#btn-clear-log').addEventListener('click', () => void clearLogs())
-  $('#btn-console').addEventListener('click', () => {
-    activeView = 'console'
-    render()
-  })
-  $('#btn-app').addEventListener('click', () => {
-    if (snap?.service.status !== 'running') return
-    activeView = 'app'
-    render()
-  })
-  $('#btn-refresh-app').addEventListener('click', refreshWorkbench)
+  $('#btn-app').addEventListener('click', () => void openWorkbench())
+  $('#btn-refresh-app').addEventListener('click', () => void refreshWorkbench())
 }
 
 async function subscribe(): Promise<void> {
