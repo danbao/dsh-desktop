@@ -100,6 +100,7 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
 }
 
 let snap: Snapshot | null = null
+let logStick = true
 let toolchainSaving = false
 let activeView: 'console' | 'app' = 'console'
 let previousServiceStatus: Snapshot['service']['status'] | null = null
@@ -154,7 +155,12 @@ function formatLog(entry: DisplayLog): string {
 
 function appendRenderedLog(entry: DisplayLog): void {
   const pane = $('#log-pane')
-  const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 8
+  // Only trust the at-bottom measurement while the pane is laid out: when the
+  // console view is hidden every dimension reads 0, which would fake "at
+  // bottom" and leave the scroll wedged at the top when shown again.
+  if (pane.clientHeight > 0) {
+    logStick = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 8
+  }
   if (currentLogChunk === null || currentLogChunkSize >= LOG_CHUNK_SIZE) {
     currentLogChunk = document.createElement('pre')
     currentLogChunk.className = 'log-chunk'
@@ -165,7 +171,16 @@ function appendRenderedLog(entry: DisplayLog): void {
   const chunkText = currentLogChunk.firstChild as Text
   chunkText.appendData(formatLog(entry))
   currentLogChunkSize += 1
-  if (atBottom) pane.scrollTop = pane.scrollHeight
+  if (logStick) pane.scrollTop = pane.scrollHeight
+}
+
+// Re-pin the log pane to the newest line if we were following it. Needed when
+// the pane becomes visible again: lines that arrived while hidden could not
+// scroll the zero-size pane, so the position was left at the top.
+function restickLog(): void {
+  if (!logStick) return
+  const pane = $('#log-pane')
+  pane.scrollTop = pane.scrollHeight
 }
 
 function renderAllLogs(): void {
@@ -469,6 +484,8 @@ function render(): void {
   $('#toolchain-running-hint').classList.toggle('hidden', service.status === 'stopped')
   renderPlugins()
 
+  const consoleWasHidden = $('#console-view').classList.contains('hidden')
+
   if (running && previousServiceStatus !== 'running' && !keepConsoleDuringServiceTransition) {
     activeView = 'app'
   } else if (!running) {
@@ -486,6 +503,7 @@ function render(): void {
   appBtn.setAttribute('aria-pressed', String(showApp))
   appBtn.disabled = !running
   refreshAppBtn.disabled = !running
+  if (consoleWasHidden && !showApp) restickLog()
   if (running) {
     const frame = $<HTMLIFrameElement>('#frame')
     if (!frame.src.startsWith('http://127.0.0.1') || !frame.src.includes(`:${service.port}`)) {
