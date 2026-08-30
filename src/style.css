@@ -508,7 +508,10 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
   content-visibility: auto;
-  contain-intrinsic-block-size: auto 650px;
+  /* Placeholder for chunks not yet laid out. A full chunk is 250 lines at
+   * 11.5px/1.5 ≈ 4300px; a too-small estimate makes the scrollbar jump when
+   * skipped chunks materialize mid-scroll. */
+  contain-intrinsic-block-size: auto 4200px;
 }
 
 #app-view {
