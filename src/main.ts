@@ -517,7 +517,6 @@ function render(): void {
   const stopBtn = $<HTMLButtonElement>('#btn-stop')
   const syncBtn = $<HTMLButtonElement>('#btn-sync')
   const updateBtn = $<HTMLButtonElement>('#btn-update')
-  const restartBtn = $<HTMLButtonElement>('#btn-update-restart')
   const savePortBtn = $<HTMLButtonElement>('#btn-save-port')
   const refreshToolchainBtn = $<HTMLButtonElement>('#btn-refresh-toolchain')
   const saveToolchainBtn = $<HTMLButtonElement>('#btn-save-toolchain')
@@ -528,7 +527,6 @@ function render(): void {
   stopBtn.disabled = busy !== null || service.status === 'stopped'
   syncBtn.disabled = busy !== null || !harness.present || !env.ready
   updateBtn.disabled = busy !== null || !env.ready
-  restartBtn.disabled = busy !== null || !env.ready || !harness.present
   savePortBtn.disabled = busy !== null || service.status !== 'stopped'
   refreshToolchainBtn.disabled = busy !== null || toolchainSaving
   saveToolchainBtn.disabled = busy !== null || running || service.status === 'starting' || toolchainSaving
@@ -652,9 +650,11 @@ async function syncOnly(): Promise<void> {
   }
 }
 
-async function update(restart: boolean): Promise<void> {
-  await run('update_harness', { restart })
-  toast(restart ? '更新完成，服务已按需重启' : '更新并构建完成')
+/** Update code, build when needed, and restore whatever service state preceded it. */
+async function update(): Promise<void> {
+  const wasRunning = snap?.service.status === 'running'
+  await run('update_harness')
+  toast(wasRunning ? '更新完成，服务已恢复' : '更新并构建完成')
 }
 
 async function loadPlugins(checkUpdates: boolean): Promise<void> {
@@ -783,8 +783,7 @@ async function checkAppUpdate(): Promise<void> {
 
 function bind(): void {
   $('#btn-sync').addEventListener('click', () => void syncOnly())
-  $('#btn-update').addEventListener('click', () => void update(false))
-  $('#btn-update-restart').addEventListener('click', () => void update(true))
+  $('#btn-update').addEventListener('click', () => void update())
   $('#btn-check-update').addEventListener('click', () => void checkAppUpdate())
   $('#btn-toggle-plugins').addEventListener('click', () => void setPluginPanel(!pluginPanelOpen))
   $('#btn-close-plugins').addEventListener('click', () => void setPluginPanel(false))

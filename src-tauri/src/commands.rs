@@ -73,7 +73,6 @@ pub async fn sync_harness(
 pub async fn update_harness(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
-    restart: bool,
 ) -> Result<SyncResult, String> {
     let app = app.clone();
     let state = state.inner().clone();
@@ -107,7 +106,9 @@ pub async fn update_harness(
             sync
         };
 
-        if restart && was_running {
+        // Restore the previous service state: updating never leaves a
+        // service down that was up when the button was pressed.
+        if was_running {
             service::start_service(&app, &state, &env)?;
         }
         snapshot::publish(&app, &state);
