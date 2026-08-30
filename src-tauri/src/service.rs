@@ -583,3 +583,9 @@ mod tests {
         assert_eq!(extract_service_url("listening on port 3080", 3080), None);
     }
 }
+
+/// The tokenized workbench URL captured from the harness stdout, if any.
+pub fn workbench_url(state: &AppState) -> Option<String> {
+    let service = state.service.lock().expect("service lock");
+    service.url.clone().filter(|url| !url.is_empty())
+}

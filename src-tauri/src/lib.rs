@@ -74,6 +74,7 @@ pub fn run() {
             commands::get_plugins,
             commands::check_plugin_updates,
             commands::manage_plugin,
+            commands::open_workbench,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
