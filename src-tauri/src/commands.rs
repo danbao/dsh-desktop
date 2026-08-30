@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     envinfo::EnvInfo,
@@ -357,32 +358,18 @@ pub async fn manage_plugin(
     .map_err(|err| err.to_string())?
 }
 
-/// Open the harness workbench in a dedicated native window.
+/// Open the harness workbench in the default browser.
 ///
-/// The workbench cannot live in the main window's iframe: the harness
-/// authenticates its whole web surface with a `SameSite=Strict` cookie, and a
-/// cross-site iframe (`tauri://` top-level over an `http://127.0.0.1` frame)
-/// is never allowed to send it — every request 401s and the frame stays
-/// blank. A dedicated window makes the harness origin the top-level document,
-/// exactly like opening the URL printed by `dsh web` in a browser.
+/// The harness authenticates its whole web surface with a `SameSite=Strict`
+/// cookie minted by the tokenized first hit, and that cookie only reaches a
+/// real browser top-level document — the 30-day session even keeps a plain
+/// bookmark working afterwards. The captured announcement URL carries the
+/// token, so the browser lands authenticated.
 #[tauri::command]
 pub fn open_workbench(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let url = service::workbench_url(&state)
         .ok_or_else(|| "尚未捕获工作台地址：请等服务启动完成后再打开".to_string())?;
-    let parsed: tauri::Url = url.parse().map_err(|err| format!("工作台地址无效：{err}"))?;
-    match app.get_webview_window("workbench") {
-        Some(window) => {
-            window.navigate(parsed).map_err(|err| format!("无法切换工作台地址：{err}"))?;
-            window.set_focus().map_err(|err| err.to_string())?;
-        }
-        None => {
-            tauri::WebviewWindowBuilder::new(&app, "workbench", tauri::WebviewUrl::External(parsed))
-                .title("DSH 工作台")
-                .inner_size(1280.0, 820.0)
-                .min_inner_size(980.0, 640.0)
-                .build()
-                .map_err(|err| format!("无法打开工作台窗口：{err}"))?;
-        }
-    }
-    Ok(())
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|err| format!("无法用默认浏览器打开工作台：{err}"))
 }
