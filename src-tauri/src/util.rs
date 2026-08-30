@@ -106,8 +106,11 @@ pub fn pump_lines<R: BufRead>(reader: &mut R, app: &tauri::AppHandle, source: &s
     }
 }
 
-/// Whether `GET /` on this loopback port answers `200`.
-pub fn http_ok(port: u16) -> bool {
+/// Whether the loopback port answers with any HTTP status line. The probe
+/// only proves that an HTTP server is serving this port: newer harness
+/// builds gate `/` behind a token and answer `401` to anonymous probes,
+/// which still means "up". Readiness is not the place to re-check auth.
+pub fn http_replies(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else {
         return false;
@@ -121,7 +124,7 @@ pub fn http_ok(port: u16) -> bool {
     let mut head = [0u8; 64];
     let n = stream.read(&mut head).unwrap_or(0);
     let head = String::from_utf8_lossy(&head[..n]);
-    head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+    head.starts_with("HTTP/1.1 ") || head.starts_with("HTTP/1.0 ")
 }
 
 /// Whether a loopback listener can still bind this port right now.
@@ -139,7 +142,9 @@ pub fn kill_group(pgid: u32, sig: i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::format_elapsed;
+    use super::{format_elapsed, http_replies};
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
     use std::time::Duration;
 
     #[test]
@@ -148,5 +153,38 @@ mod tests {
         assert_eq!(format_elapsed(Duration::from_secs(59)), "59 秒");
         assert_eq!(format_elapsed(Duration::from_secs(61)), "1 分 1 秒");
         assert_eq!(format_elapsed(Duration::from_secs(3_605)), "60 分 5 秒");
+    }
+
+    /// Respond to one TCP request with the given raw head, then close.
+    fn serve_raw_head(head: &'static [u8]) -> u16 {
+        let listener = TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 256];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(head);
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn http_replies_accepts_any_http_status_as_readiness() {
+        // 200 responder
+        assert!(http_replies(serve_raw_head(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )));
+        // Token-gated servers answer 401 to anonymous probes — still "up".
+        assert!(http_replies(serve_raw_head(
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )));
+        // A redirect (303 with Location) is equally proof of a live server.
+        assert!(http_replies(serve_raw_head(
+            b"HTTP/1.1 303 See Other\r\nLocation: /app\r\nConnection: close\r\n\r\n"
+        )));
+        // Garbage that is not HTTP must not count.
+        assert!(!http_replies(serve_raw_head(b"not an http server\r\n\r\n")));
     }
 }
