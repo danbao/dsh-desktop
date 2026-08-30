@@ -87,9 +87,10 @@ pub fn build(state: &AppState) -> Snapshot {
     }
 }
 
-/// Emit the current snapshot to every window.
+/// Emit the current snapshot to every window and refresh the tray menu.
 pub fn publish(app: &AppHandle, state: &AppState) {
     let _ = app.emit("state-changed", build(state));
+    crate::tray::refresh(app);
 }
 
 /// Convenience for command bodies that just finished mutating state.

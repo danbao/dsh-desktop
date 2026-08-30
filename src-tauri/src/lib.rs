@@ -10,6 +10,7 @@ pub mod plugins;
 pub mod service;
 pub mod snapshot;
 pub mod toolchain;
+pub mod tray;
 pub mod util;
 
 use std::sync::Arc;
@@ -37,7 +38,7 @@ pub fn run() {
                 .iter()
                 .find(|config| config.label == "main")
                 .expect("main window config");
-            tauri::WebviewWindowBuilder::from_config(app.handle(), main_config)?
+            let main_window = tauri::WebviewWindowBuilder::from_config(app.handle(), main_config)?
                 .on_new_window(move |url, _features| {
                     if is_browser_url(&url) {
                         if let Err(err) = opener.opener().open_url(url.as_str(), None::<&str>) {
@@ -57,6 +58,20 @@ pub fn run() {
                     NewWindowResponse::Deny
                 })
                 .build()?;
+            let hide_target = main_window.clone();
+            main_window.on_window_event(move |event| {
+                // Menu-bar app: the close button hides the window; the
+                // app (and any running service) keep living in the tray.
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = hide_target.hide();
+                }
+            });
+            if let Err(err) = tray::setup(app.handle()) {
+                // A missing tray degrades to window-only mode; the app stays
+                // usable, so log instead of failing the whole setup.
+                util::emit_log(app.handle(), "desktop", &format!("{err}"));
+            }
             std::thread::spawn(move || autostart(handle));
             Ok(())
         })
@@ -79,9 +94,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                let state = app_handle.state::<Arc<AppState>>();
-                service::kill_on_exit(&state);
+            match event {
+                tauri::RunEvent::Exit => {
+                    let state = app_handle.state::<Arc<AppState>>();
+                    service::kill_on_exit(&state);
+                }
+                // `code: None` is the implicit request raised by the last
+                // window going away; the tray keeps the app alive, so it is
+                // vetoed. Explicit quits (`app.exit(0)` from the tray) carry
+                // a code and pass through to the Exit handler above.
+                tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+                    api.prevent_exit();
+                }
+                _ => {}
             }
         });
 }
