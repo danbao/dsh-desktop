@@ -52,7 +52,11 @@ pub fn build(state: &AppState) -> Snapshot {
     let behind = *state.last_fetch_behind.lock().expect("behind lock");
 
     let service_now = state.service.lock().expect("service lock").clone();
-    let url = if service_now.port > 0 {
+    // Prefer the tokenized URL the harness announced on stdout: newer builds
+    // answer `401` on the bare port, so the embedded webview needs the token.
+    let url = if let Some(captured) = service_now.url.as_deref().filter(|u| !u.is_empty()) {
+        captured.to_string()
+    } else if service_now.port > 0 {
         format!("http://127.0.0.1:{}", service_now.port)
     } else {
         match paths::load_config() {

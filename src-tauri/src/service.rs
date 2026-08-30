@@ -5,6 +5,7 @@
 //! a stop flag, and the supervisor handle so commands can signal and wait
 //! without racing on the child handle.
 
+use std::io::BufRead as _;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +56,10 @@ pub struct ServiceState {
     pub status: String,
     pub port: u16,
     pub error: Option<String>,
+    /// Tokenized URL captured from the harness stdout (`…/?token=…`). Newer
+    /// harness builds answer `401` on the bare port, so the embedded webview
+    /// must open the authenticated URL. `None` until the harness announces it.
+    pub url: Option<String>,
 }
 
 impl Default for ServiceState {
@@ -63,6 +68,7 @@ impl Default for ServiceState {
             status: "stopped".to_string(),
             port: 0,
             error: None,
+            url: None,
         }
     }
 }
@@ -186,6 +192,7 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
                 status: "starting".into(),
                 port,
                 error: None,
+                url: None,
             });
             state.changed(app);
             util::emit_log(app, "build", "构建产物缺失或过期，自动执行 install/build");
@@ -254,6 +261,7 @@ pub fn start_service(app: &AppHandle, state: &AppState, env: &EnvInfo) -> Result
         status: "starting".into(),
         port,
         error: None,
+        url: None,
     });
     state.changed(app);
 
@@ -341,7 +349,7 @@ fn supervise(
     port: u16,
     stop_flag: Arc<AtomicBool>,
 ) {
-    let readers = spawn_dsh_readers(stdout, stderr, &app);
+    let readers = spawn_dsh_readers(stdout, stderr, &app, port);
 
     // Startup phase: probe until healthy, or fail fast on early exit.
     let started = Instant::now();
@@ -353,7 +361,7 @@ fn supervise(
             stopped_by_user = true;
             break;
         }
-        if util::http_ok(port) {
+        if util::http_replies(port) {
             break;
         }
         if let Some(status) = child.try_wait().ok().flatten() {
@@ -386,6 +394,7 @@ fn supervise(
             status: "running".into(),
             port,
             error: None,
+            url: current_captured_url(&app),
         },
     );
 
@@ -402,7 +411,7 @@ fn supervise(
             reap_and_report(&app, child, readers, "dsh 进程意外退出".to_string());
             return;
         }
-        if util::http_ok(port) {
+        if util::http_replies(port) {
             misses = 0;
             continue;
         }
@@ -424,18 +433,76 @@ fn spawn_dsh_readers(
     stdout: std::process::ChildStdout,
     stderr: std::process::ChildStderr,
     app: &AppHandle,
+    port: u16,
 ) -> [std::thread::JoinHandle<()>; 2] {
     let app_out = app.clone();
     let t_out = std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stdout);
-        util::pump_lines(&mut reader, &app_out, "dsh");
+        pump_dsh_output(stdout, &app_out, port);
     });
     let app_err = app.clone();
     let t_err = std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stderr);
-        util::pump_lines(&mut reader, &app_err, "dsh");
+        pump_dsh_output(stderr, &app_err, port);
     });
     [t_out, t_err]
+}
+
+/// Log one harness output stream line by line, capturing the tokenized
+/// service URL the harness announces once its web server is up.
+fn pump_dsh_output<R: std::io::Read>(reader: R, app: &AppHandle, port: u16) {
+    let mut reader = std::io::BufReader::new(reader);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf);
+                let line = line.trim_end_matches(['\n', '\r']);
+                if line.is_empty() {
+                    continue;
+                }
+                if let Some(url) = extract_service_url(line, port) {
+                    report_service_url(app, url);
+                }
+                util::emit_log(app, "dsh", line);
+            }
+        }
+    }
+}
+
+/// Extract the tokenized service URL from a harness output line like
+/// `dsh web: http://127.0.0.1:3080/?token=…`. Newer harness builds gate the
+/// web server behind that token (the bare port answers `401`), so the
+/// embedded webview must open the authenticated URL.
+fn extract_service_url(line: &str, port: u16) -> Option<String> {
+    let marker = format!("http://127.0.0.1:{port}/");
+    let start = line.find(&marker)?;
+    let tail = &line[start..];
+    let end = tail
+        .find(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '）' | '】'))
+        .unwrap_or(tail.len());
+    let url = &tail[..end];
+    (url.contains("token=")).then(|| url.to_string())
+}
+
+/// Merge a captured service URL into the current service state.
+fn report_service_url(app: &AppHandle, url: String) {
+    let Some(state) = app.try_state::<Arc<AppState>>() else {
+        return;
+    };
+    {
+        let mut service = state.service.lock().expect("service lock");
+        if service.url.as_deref() == Some(url.as_str()) {
+            return;
+        }
+        service.url = Some(url);
+    }
+    state.changed(app);
+}
+
+fn current_captured_url(app: &AppHandle) -> Option<String> {
+    app.try_state::<Arc<AppState>>()
+        .and_then(|state| state.service.lock().ok()?.url.clone())
 }
 
 fn graceful_kill(child: &mut Child, pgid: u32) {
@@ -479,6 +546,7 @@ fn reap_and_report(
             status: "error".into(),
             port,
             error: Some(message),
+            url: None,
         },
     );
 }
@@ -487,5 +555,31 @@ fn reap_silently(mut child: Child, readers: [std::thread::JoinHandle<()>; 2]) {
     let _ = child.wait();
     for reader in readers {
         let _ = reader.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_service_url_takes_tokenized_url_from_announcement_line() {
+        let line = "dsh web: http://127.0.0.1:3080/?token=AkN6Cf_OQeDJB3Mr0QtQ3tbPfF_rxbcrjSHdKMpXtNc";
+        assert_eq!(
+            extract_service_url(line, 3080).as_deref(),
+            Some("http://127.0.0.1:3080/?token=AkN6Cf_OQeDJB3Mr0QtQ3tbPfF_rxbcrjSHdKMpXtNc")
+        );
+        // Trailing prose after the URL must not leak into the capture.
+        let line = "dsh web: http://127.0.0.1:3080/?token=abc123）请复制";
+        assert_eq!(
+            extract_service_url(line, 3080).as_deref(),
+            Some("http://127.0.0.1:3080/?token=abc123")
+        );
+        // Bare URL without a token is useless for auth: not captured.
+        assert_eq!(extract_service_url("dsh web: http://127.0.0.1:3080/", 3080), None);
+        // Other ports must not match.
+        assert_eq!(extract_service_url("dsh web: http://127.0.0.1:4000/?token=x", 3080), None);
+        // Unrelated lines: no capture.
+        assert_eq!(extract_service_url("listening on port 3080", 3080), None);
     }
 }
