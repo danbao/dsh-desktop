@@ -122,6 +122,12 @@ let localLogId = 0
 let logHydrating = true
 let currentLogChunk: HTMLPreElement | null = null
 let currentLogChunkSize = 0
+// Incoming lines are batched and flushed once per animation frame: appending
+// and scrolling per line forces a synchronous layout of the whole pane on
+// every line, which stutters badly while a subprocess streams output.
+let pendingLogText = ''
+let pendingLogCount = 0
+let logFlushScheduled = false
 
 function appendLog(entry: LogLine): void {
   const displayEntry: DisplayLog = {
@@ -154,6 +160,17 @@ function formatLog(entry: DisplayLog): string {
 }
 
 function appendRenderedLog(entry: DisplayLog): void {
+  pendingLogText += formatLog(entry)
+  pendingLogCount += 1
+  if (!logFlushScheduled) {
+    logFlushScheduled = true
+    requestAnimationFrame(flushPendingLogs)
+  }
+}
+
+function flushPendingLogs(): void {
+  logFlushScheduled = false
+  if (pendingLogText === '') return
   const pane = $('#log-pane')
   // Only trust the at-bottom measurement while the pane is laid out: when the
   // console view is hidden every dimension reads 0, which would fake "at
@@ -169,8 +186,10 @@ function appendRenderedLog(entry: DisplayLog): void {
     currentLogChunkSize = 0
   }
   const chunkText = currentLogChunk.firstChild as Text
-  chunkText.appendData(formatLog(entry))
-  currentLogChunkSize += 1
+  chunkText.appendData(pendingLogText)
+  currentLogChunkSize += pendingLogCount
+  pendingLogText = ''
+  pendingLogCount = 0
   if (logStick) pane.scrollTop = pane.scrollHeight
 }
 
@@ -184,6 +203,10 @@ function restickLog(): void {
 }
 
 function renderAllLogs(): void {
+  // Queued lines are already in logEntries; the full re-render below covers
+  // them, so drop the buffer to avoid appending them twice.
+  pendingLogText = ''
+  pendingLogCount = 0
   const pane = $('#log-pane')
   const fragment = document.createDocumentFragment()
   for (let start = 0; start < logEntries.length; start += LOG_CHUNK_SIZE) {
@@ -218,6 +241,39 @@ async function hydrateLogs(): Promise<void> {
     })
     logHydrating = false
     renderAllLogs()
+  }
+}
+
+/** Write text to the system clipboard, falling back to execCommand when the
+ * async clipboard API is unavailable in the webview. */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    const area = document.createElement('textarea')
+    area.value = text
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    const ok = document.execCommand('copy')
+    area.remove()
+    return ok
+  }
+}
+
+async function copyAllLogs(): Promise<void> {
+  const text = logEntries.map(formatLog).join('')
+  if (text === '') {
+    toast('暂无日志可复制')
+    return
+  }
+  const copied = await writeClipboard(text)
+  if (copied) {
+    toast(`已复制全部 ${logEntries.length} 行日志`)
+  } else {
+    toast('复制失败，请手动选择日志复制', true)
   }
 }
 
@@ -794,6 +850,7 @@ function bind(): void {
     await run('set_config', { port })
     toast('端口已保存')
   })
+  $('#btn-copy-log').addEventListener('click', () => void copyAllLogs())
   $('#btn-clear-log').addEventListener('click', () => void clearLogs())
   $('#btn-console').addEventListener('click', () => {
     activeView = 'console'
