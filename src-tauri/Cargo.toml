@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "0.3.4"
+version = "0.3.5"
 description = "DeepSeek Harness 桌面端（macOS）"
 authors = ["danbao"]
 edition = "2021"
