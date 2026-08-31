@@ -136,6 +136,11 @@ body {
   box-shadow: 0 0 0 3px rgba(47, 191, 113, 0.12);
 }
 
+.env-dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(232, 163, 61, 0.12);
+}
+
 .env-dot.problem {
   background: var(--err);
   box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.12);
@@ -146,7 +151,8 @@ body {
   grid-template-columns: max-content 1fr;
   gap: 3px 12px;
   margin: 0 0 10px;
-  word-break: break-all;
+  /* Break only overflowing tokens (paths, hashes); normal words stay whole. */
+  overflow-wrap: anywhere;
 }
 
 .kv dt {

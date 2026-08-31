@@ -63,13 +63,18 @@
               </div>
             </div>
             <div class="card">
-              <h3>服务</h3>
+              <div class="card-title-row">
+                <h3>服务</h3>
+                <span id="service-ready-dot" class="env-dot" aria-hidden="true"></span>
+              </div>
               <dl id="service-info" class="kv"><dt>—</dt></dl>
               <div class="card-actions">
                 <label class="port-label">端口
                   <input id="port-input" type="number" min="1024" max="65535" />
                 </label>
                 <button id="btn-save-port" class="btn btn-small">保存端口</button>
+              </div>
+              <div class="card-actions">
                 <button id="btn-start" class="btn btn-primary">启动服务</button>
                 <button id="btn-stop" class="btn btn-danger">停止服务</button>
               </div>

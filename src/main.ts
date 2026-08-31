@@ -300,8 +300,15 @@ function toast(message: string, isError = false): void {
   window.setTimeout(() => el.classList.add('hidden'), isError ? 6000 : 3500)
 }
 
-function kv(pairs: Array<[string, string]>): string {
-  return pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+type KvPair = [key: string, value: string, title?: string]
+
+function kv(pairs: KvPair[]): string {
+  return pairs
+    .map(([k, v, title]) => {
+      const attr = title === undefined ? '' : ` title="${escapeHtml(title)}"`
+      return `<dt${attr}>${k}</dt><dd${attr}>${v}</dd>`
+    })
+    .join('')
 }
 
 const STATUS_TEXT: Record<Snapshot['service']['status'], string> = {
@@ -309,6 +316,27 @@ const STATUS_TEXT: Record<Snapshot['service']['status'], string> = {
   starting: '启动中…',
   running: '运行中',
   error: '出错',
+}
+
+/** The configured port, taken from the live service or parsed out of the
+ * fallback URL the backend builds from config when the service is down. */
+function servicePort(service: Snapshot['service']): number {
+  if (service.port > 0) return service.port
+  const match = service.url.match(/:(\d+)/)
+  return match === null ? 3080 : Number(match[1])
+}
+
+function serviceDotClass(status: Snapshot['service']['status']): string {
+  switch (status) {
+    case 'running':
+      return 'ready'
+    case 'starting':
+      return 'warn'
+    case 'error':
+      return 'problem'
+    default:
+      return ''
+  }
 }
 
 function pillClass(status: Snapshot['service']['status']): string {
@@ -483,21 +511,31 @@ function render(): void {
     STATUS_TEXT[service.status] + (busy !== null ? `（${busy}中…）` : '')
 
   $('#env-info').innerHTML = kv([
-    ['Node', env.nodeVersion ?? '未找到'],
-    ...(env.nodeBin !== null ? ([['Node 来源', `${env.nodeSource ?? '自动'} → ${env.nodeBin}`]] as Array<[string, string]>) : []),
-    ['pnpm', env.pnpmVersion ?? '未找到'],
-    ...(env.pnpmBin !== null ? ([['pnpm 来源', `${env.pnpmSource ?? '自动'} → ${env.pnpmBin}`]] as Array<[string, string]>) : []),
+    [
+      'Node',
+      `${env.nodeVersion ?? '未找到'}${env.nodeSource !== null ? `（${env.nodeSource}）` : ''}`,
+      env.nodeBin ?? undefined,
+    ],
+    [
+      'pnpm',
+      `${env.pnpmVersion ?? '未找到'}${env.pnpmSource !== null ? `（${env.pnpmSource}）` : ''}`,
+      env.pnpmBin ?? undefined,
+    ],
     ['git', env.gitVersion ?? '未找到'],
-    ['登录 shell', env.shell ?? '未知'],
-    ...(env.discoveryNotes.length > 0 ? ([['检测说明', env.discoveryNotes.join('；')]] as Array<[string, string]>) : []),
-    ...(env.problems.length > 0 ? ([['问题', env.problems.join('；')]] as Array<[string, string]>) : []),
+    ...(env.discoveryNotes.length > 0 ? ([['检测说明', env.discoveryNotes.join('；')]] as KvPair[]) : []),
+    ...(env.problems.length > 0 ? ([['问题', env.problems.join('；')]] as KvPair[]) : []),
   ])
   $('#env-ready-dot').className = `env-dot ${env.ready ? 'ready' : 'problem'}`
 
+  // /Users/<name>/… reads better as ~/…; the full path rides the tooltip.
+  const shortHarnessPath = harness.path.replace(/^\/Users\/[^/]+/, '~')
   $('#harness-info').innerHTML = harness.present
     ? kv([
-        ['路径', harness.path],
-        ['当前提交', `${harness.shortCommit ?? '?'} ${harness.commitDate ?? ''}`],
+        ['路径', shortHarnessPath, harness.path],
+        [
+          '当前提交',
+          `${harness.shortCommit ?? '?'} ${harness.commitDate?.replace(/\s*\+\d{4}$/, '') ?? ''}`,
+        ],
         ['说明', harness.subject ?? ''],
         [
           '上游更新',
@@ -505,13 +543,21 @@ function render(): void {
         ],
         ['构建状态', harness.buildNeeded ? '需要构建（代码有更新或产物缺失）' : '产物与代码一致'],
       ])
-    : kv([['路径', harness.path], ['状态', '尚未克隆，点击「更新代码并构建」获取最新代码']])
+    : kv([['路径', shortHarnessPath, harness.path], ['状态', '尚未克隆，点击「更新代码并构建」获取最新代码']])
 
+  // The tokenized URL belongs in the browser launch, not on screen: show the
+  // bare address and keep the port box in sync with whatever is configured.
+  const port = servicePort(service)
   $('#service-info').innerHTML = kv([
     ['状态', STATUS_TEXT[service.status]],
-    ['地址', service.url],
-    ...(service.error !== null ? ([['错误', service.error]] as Array<[string, string]>) : []),
+    ['地址', `http://127.0.0.1:${port}`],
+    ...(service.error !== null ? ([['错误', service.error]] as KvPair[]) : []),
   ])
+  $('#service-ready-dot').className = 'env-dot ' + serviceDotClass(service.status)
+  const portInput = $<HTMLInputElement>('#port-input')
+  if (document.activeElement !== portInput && portInput.value === '') {
+    portInput.value = String(port)
+  }
 
   const startBtn = $<HTMLButtonElement>('#btn-start')
   const stopBtn = $<HTMLButtonElement>('#btn-stop')
