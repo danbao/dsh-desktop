@@ -13,6 +13,10 @@
           <span class="name">DSH Desktop</span>
         </div>
         <span id="status-pill" class="pill pill-idle">加载中…</span>
+        <nav class="view-nav" aria-label="页面切换">
+          <button id="btn-nav-console" class="btn btn-ghost btn-nav" aria-pressed="true">控制台</button>
+          <button id="btn-nav-plugins" class="btn btn-ghost btn-nav" aria-pressed="false">插件</button>
+        </nav>
         <div class="spacer"></div>
         <button id="btn-app" class="btn btn-ghost" aria-pressed="false" disabled>打开工作台</button>
         <button id="btn-check-update" class="btn btn-ghost">检查更新</button>
@@ -86,35 +90,10 @@
               </div>
               <dl id="plugin-info" class="kv"><dt>状态</dt><dd>读取中…</dd></dl>
               <div class="card-actions">
-                <button id="btn-toggle-plugins" class="btn" type="button" aria-expanded="false">管理插件</button>
+                <button id="btn-toggle-plugins" class="btn" type="button">管理插件</button>
               </div>
             </div>
           </div>
-          <section id="plugin-manager" class="plugin-manager hidden" aria-labelledby="plugin-manager-title">
-            <div class="plugin-manager-head">
-              <div>
-                <p class="plugin-eyebrow">WEB PROFILE / PACKAGE MANIFEST</p>
-                <h2 id="plugin-manager-title">插件管理</h2>
-                <p class="plugin-intro">安装到桌面端使用的 web profile。变更时会自动停服，并在完成后恢复。</p>
-              </div>
-              <div class="plugin-manager-actions">
-                <button id="btn-check-plugin-updates" class="btn btn-small" type="button">检查更新</button>
-                <button id="btn-close-plugins" class="btn btn-small btn-ghost" type="button">收起</button>
-              </div>
-            </div>
-            <div id="plugin-manager-status" class="plugin-manager-status" role="status"></div>
-            <div id="plugin-list" class="plugin-list"></div>
-            <form id="custom-plugin-form" class="custom-plugin-form">
-              <div>
-                <label for="custom-plugin-spec">安装自定义 npm 插件</label>
-                <p>仅接受包名、精确版本或 dist-tag；不支持 Git、URL 和本地路径。</p>
-              </div>
-              <div class="custom-plugin-control">
-                <input id="custom-plugin-spec" type="text" placeholder="例如 dsh-ringcentral@0.3.3" autocomplete="off" spellcheck="false" />
-                <button id="btn-install-custom-plugin" class="btn btn-primary" type="submit">安装</button>
-              </div>
-            </form>
-          </section>
           <div class="log-wrap">
             <div class="log-head">
               <span>日志</span>
@@ -123,6 +102,32 @@
             </div>
             <div id="log-pane" class="log-pane" role="log" aria-live="off"></div>
           </div>
+        </section>
+        <!-- Plugins page -->
+        <section id="plugins-view" class="plugins-view hidden" aria-labelledby="plugin-manager-title">
+          <div class="plugin-manager-head">
+            <div>
+              <p class="plugin-eyebrow">WEB PROFILE / PACKAGE MANIFEST</p>
+              <h2 id="plugin-manager-title">插件管理</h2>
+              <p class="plugin-intro">安装到桌面端使用的 web profile。变更时会自动停服，并在完成后恢复。</p>
+            </div>
+            <div class="plugin-manager-actions">
+              <button id="btn-check-plugin-updates" class="btn btn-small" type="button">检查更新</button>
+              <button id="btn-close-plugins" class="btn btn-small btn-ghost" type="button">返回控制台</button>
+            </div>
+          </div>
+          <div id="plugin-manager-status" class="plugin-manager-status" role="status"></div>
+          <div id="plugin-list" class="plugin-list"></div>
+          <form id="custom-plugin-form" class="custom-plugin-form">
+            <div>
+              <label for="custom-plugin-spec">安装自定义 npm 插件</label>
+              <p>仅接受包名、精确版本或 dist-tag；不支持 Git、URL 和本地路径。</p>
+            </div>
+            <div class="custom-plugin-control">
+              <input id="custom-plugin-spec" type="text" placeholder="例如 dsh-ringcentral@0.3.3" autocomplete="off" spellcheck="false" />
+              <button id="btn-install-custom-plugin" class="btn btn-primary" type="submit">安装</button>
+            </div>
+          </form>
         </section>
       </main>
       <div id="toast" class="toast hidden"></div>
