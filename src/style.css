@@ -289,12 +289,20 @@ body {
   margin-top: 11px;
 }
 
-.plugin-manager {
-  flex: none;
+.view-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+/* The plugins page fills the window; sections inside stack and scroll. */
+.plugins-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
   background: var(--bg-raise);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
 }
 
 .plugin-manager-head {
@@ -304,6 +312,10 @@ body {
   gap: 18px;
   padding: 15px 16px 13px;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-raise);
+  z-index: 1;
 }
 
 .plugin-eyebrow {
@@ -315,7 +327,7 @@ body {
   letter-spacing: 0.13em;
 }
 
-.plugin-manager h2 {
+.plugins-view h2 {
   margin: 0;
   font-size: 15px;
 }

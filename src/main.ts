@@ -104,7 +104,7 @@ let logStick = true
 let toolchainSaving = false
 let pluginCatalog: PluginCatalog | null = null
 let pluginUpdates = new Map<string, PluginUpdate>()
-let pluginPanelOpen = false
+let activeView: 'console' | 'plugins' = 'console'
 let pluginLoading = false
 let pluginChecking = false
 let pluginOperation = false
@@ -373,8 +373,6 @@ function renderPluginSummary(): void {
   const dot = $('#plugin-ready-dot')
   const info = $('#plugin-info')
   const toggle = $<HTMLButtonElement>('#btn-toggle-plugins')
-  toggle.setAttribute('aria-expanded', String(pluginPanelOpen))
-  toggle.textContent = pluginPanelOpen ? '收起插件' : '管理插件'
   toggle.disabled = pluginLoading
 
   if (pluginError !== null) {
@@ -404,9 +402,6 @@ function renderPluginSummary(): void {
 }
 
 function renderPluginManager(): void {
-  $('#plugin-manager').classList.toggle('hidden', !pluginPanelOpen)
-  if (!pluginPanelOpen) return
-
   const status = $('#plugin-manager-status')
   const failedChecks = [...pluginUpdates.values()].filter((update) => update.error !== null).length
   if (pluginError !== null) {
@@ -581,15 +576,11 @@ function render(): void {
   $('#toolchain-running-hint').classList.toggle('hidden', service.status === 'stopped')
   renderPlugins()
 
-  const consoleWasHidden = $('#console-view').classList.contains('hidden')
-
-  // The workbench runs in the default browser (open_workbench): the harness's
-  // SameSite=Strict session cookie only reaches a real browser top-level
-  // document. This window is the console at all times.
-  $('#console-view').classList.remove('hidden')
+  // The workbench runs in the default browser (open_workbench): this window
+  // hosts the console and the plugins page, switched by the topbar tabs.
+  syncViews()
   const appBtn = $<HTMLButtonElement>('#btn-app')
   appBtn.disabled = !running
-  if (consoleWasHidden) restickLog()
 }
 
 async function run(name: string, args?: Record<string, unknown>): Promise<void> {
@@ -739,10 +730,25 @@ async function checkPluginUpdates(): Promise<void> {
   }
 }
 
-async function setPluginPanel(show: boolean): Promise<void> {
-  pluginPanelOpen = show
-  renderPlugins()
-  if (show) await loadPlugins(true)
+/** Switch the main window page; entering the plugins page refreshes its data. */
+function showView(view: 'console' | 'plugins'): void {
+  if (activeView === view) return
+  activeView = view
+  syncViews()
+  if (view === 'plugins') void loadPlugins(true)
+}
+
+/** Apply `activeView` to the DOM. Runs outside render() so tab clicks work
+ * even before the first snapshot arrives. */
+function syncViews(): void {
+  const consoleView = $('#console-view')
+  const consoleWasHidden = consoleView.classList.contains('hidden')
+  const showConsole = activeView === 'console'
+  consoleView.classList.toggle('hidden', !showConsole)
+  $('#plugins-view').classList.toggle('hidden', showConsole)
+  $('#btn-nav-console').setAttribute('aria-pressed', String(showConsole))
+  $('#btn-nav-plugins').setAttribute('aria-pressed', String(!showConsole))
+  if (showConsole && consoleWasHidden) restickLog()
 }
 
 async function managePlugin(action: PluginAction, packageSpec: string): Promise<void> {
@@ -831,8 +837,10 @@ function bind(): void {
   $('#btn-sync').addEventListener('click', () => void syncOnly())
   $('#btn-update').addEventListener('click', () => void update())
   $('#btn-check-update').addEventListener('click', () => void checkAppUpdate())
-  $('#btn-toggle-plugins').addEventListener('click', () => void setPluginPanel(!pluginPanelOpen))
-  $('#btn-close-plugins').addEventListener('click', () => void setPluginPanel(false))
+  $('#btn-nav-console').addEventListener('click', () => showView('console'))
+  $('#btn-nav-plugins').addEventListener('click', () => showView('plugins'))
+  $('#btn-toggle-plugins').addEventListener('click', () => showView('plugins'))
+  $('#btn-close-plugins').addEventListener('click', () => showView('console'))
   $('#btn-check-plugin-updates').addEventListener('click', () => void checkPluginUpdates())
   $('#plugin-list').addEventListener('click', (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-plugin-action]')
