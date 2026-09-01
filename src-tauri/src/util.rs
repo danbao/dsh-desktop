@@ -10,12 +10,13 @@ use tauri::{Emitter, Manager};
 
 use std::sync::Arc;
 
-use crate::service::AppState;
+use crate::{logfile, service::AppState};
 
-/// Emit one log line to the UI console (and stderr).
+/// Emit one log line to the UI console, the durable log file, and stderr.
 pub fn emit_log(app: &tauri::AppHandle, source: &str, line: &str) {
     let state = app.state::<Arc<AppState>>();
     let entry = state.logs.push(source, line);
+    logfile::append(source, line, entry.timestamp_ms);
     let _ = app.emit("log", entry);
     eprintln!("[{source}] {line}");
 }

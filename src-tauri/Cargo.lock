@@ -848,6 +848,7 @@ name = "dsh-desktop"
 version = "0.3.11"
 dependencies = [
  "anyhow",
+ "chrono",
  "libc",
  "semver",
  "serde",

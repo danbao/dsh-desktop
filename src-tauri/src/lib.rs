@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod envinfo;
 pub mod gitops;
+pub mod logfile;
 pub mod logs;
 pub mod paths;
 pub mod pipeline;
@@ -29,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(AppState::new()))
         .setup(|app| {
+            logfile::init(&paths::logs_dir());
             let handle = app.handle().clone();
             let opener = handle.clone();
             let main_config = app
@@ -67,6 +69,11 @@ pub fn run() {
                     let _ = hide_target.hide();
                 }
             });
+            util::emit_log(
+                app.handle(),
+                "desktop",
+                &format!("日志文件：{}", paths::logs_dir().join(logfile::FILE_NAME).display()),
+            );
             if let Err(err) = tray::setup(app.handle()) {
                 // A missing tray degrades to window-only mode; the app stays
                 // usable, so log instead of failing the whole setup.
