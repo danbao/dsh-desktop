@@ -51,6 +51,13 @@ pub fn app_dir() -> PathBuf {
     dir
 }
 
+/// Durable rotating log files live here (`logs/app.log`, …).
+pub fn logs_dir() -> PathBuf {
+    let dir = app_dir().join("logs");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
 /// Where the managed harness checkout lives. A development override
 /// (`DSH_DESKTOP_HARNESS_PATH`) points the whole pipeline at an existing
 /// source tree instead — cloning is skipped, everything else behaves the same.
