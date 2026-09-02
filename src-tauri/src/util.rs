@@ -92,15 +92,20 @@ pub(crate) fn format_elapsed(elapsed: Duration) -> String {
 
 /// Pump one subprocess stream into the log, line by line.
 pub fn pump_lines<R: BufRead>(reader: &mut R, app: &tauri::AppHandle, source: &str) {
+    pump_line_values(reader, |line| emit_log(app, source, line));
+}
+
+fn pump_line_values<R: BufRead>(reader: &mut R, mut emit: impl FnMut(&str)) {
     let mut buf = Vec::new();
     loop {
+        buf.clear();
         match reader.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
                 let owned = String::from_utf8_lossy(&buf).into_owned();
                 let line = owned.trim_end_matches(['\n', '\r']);
                 if !line.is_empty() {
-                    emit_log(app, source, line);
+                    emit(line);
                 }
             }
         }
@@ -143,7 +148,8 @@ pub fn kill_group(pgid: u32, sig: i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_elapsed, http_replies};
+    use super::{format_elapsed, http_replies, pump_line_values};
+    use std::io::Cursor;
     use std::io::{Read as _, Write as _};
     use std::net::TcpListener;
     use std::time::Duration;
@@ -154,6 +160,16 @@ mod tests {
         assert_eq!(format_elapsed(Duration::from_secs(59)), "59 秒");
         assert_eq!(format_elapsed(Duration::from_secs(61)), "1 分 1 秒");
         assert_eq!(format_elapsed(Duration::from_secs(3_605)), "60 分 5 秒");
+    }
+
+    #[test]
+    fn streams_each_subprocess_line_once() {
+        let mut reader = Cursor::new(b"first\nsecond\r\n\nthird");
+        let mut lines = Vec::new();
+
+        pump_line_values(&mut reader, |line| lines.push(line.to_owned()));
+
+        assert_eq!(lines, ["first", "second", "third"]);
     }
 
     /// Respond to one TCP request with the given raw head, then close.
