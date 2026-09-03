@@ -388,7 +388,7 @@ fn add_version_dirs(entries: &mut Vec<PathEntry>, root: &Path, suffix: &str, sou
         .filter_map(Result::ok)
         .map(|item| item.path())
         .collect();
-    versions.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+    versions.sort_by_key(|path| std::cmp::Reverse(version_key(path)));
     entries.extend(versions.into_iter().map(|version| PathEntry {
         dir: version.join(suffix),
         source: source.to_string(),
@@ -589,10 +589,7 @@ fn run_capture(mut command: Command, timeout: Duration) -> IoResult<Capture> {
 fn drain_limited<R: Read>(mut reader: R) -> Vec<u8> {
     let mut kept = Vec::new();
     let mut buffer = [0u8; 8192];
-    loop {
-        let Ok(count) = reader.read(&mut buffer) else {
-            break;
-        };
+    while let Ok(count) = reader.read(&mut buffer) {
         if count == 0 {
             break;
         }

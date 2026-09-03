@@ -52,7 +52,11 @@ pub fn append(source: &str, line: &str, timestamp_ms: u64) {
 impl FileLog {
     pub fn new(dir: &Path, max_file_bytes: u64, max_files: usize) -> Self {
         let _ = fs::create_dir_all(dir);
-        let file = OpenOptions::new().create(true).append(true).open(dir.join(FILE_NAME)).ok();
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(FILE_NAME))
+            .ok();
         let written = file
             .as_ref()
             .and_then(|file| file.metadata().ok())
@@ -62,7 +66,11 @@ impl FileLog {
             dir: dir.to_path_buf(),
             max_file_bytes,
             max_files: max_files.max(1),
-            inner: Mutex::new(Inner { file, written, disabled: false }),
+            inner: Mutex::new(Inner {
+                file,
+                written,
+                disabled: false,
+            }),
         }
     }
 
@@ -153,7 +161,10 @@ mod tests {
 
     fn read(path: &Path) -> String {
         let mut text = String::new();
-        File::open(path).expect("open").read_to_string(&mut text).expect("read");
+        File::open(path)
+            .expect("open")
+            .read_to_string(&mut text)
+            .expect("read");
         text
     }
 
@@ -161,7 +172,8 @@ mod tests {
     fn appends_formatted_lines_and_resumes_across_restarts() {
         let dir = temp_dir("append");
         let log = FileLog::new(&dir, MAX_FILE_BYTES, MAX_FILES);
-        log.append("dsh", "服务启动", 1_782_000_000_000).expect("append");
+        log.append("dsh", "服务启动", 1_782_000_000_000)
+            .expect("append");
 
         let text = read(&dir.join(FILE_NAME));
         assert!(text.contains(" [dsh] 服务启动\n"), "{text}");
@@ -169,7 +181,8 @@ mod tests {
 
         // A fresh handle resumes at the existing file instead of truncating.
         let log = FileLog::new(&dir, MAX_FILE_BYTES, MAX_FILES);
-        log.append("git", "fetch", 1_782_000_001_000).expect("append");
+        log.append("git", "fetch", 1_782_000_001_000)
+            .expect("append");
         let text = read(&dir.join(FILE_NAME));
         assert_eq!(text.lines().count(), 2, "{text}");
     }
@@ -200,7 +213,8 @@ mod tests {
         let max_file = 64u64;
         let log = FileLog::new(&dir, max_file, 3);
         for index in 0..100 {
-            log.append("test", &format!("payload-{index:04}"), 1_782_000_000_000).expect("append");
+            log.append("test", &format!("payload-{index:04}"), 1_782_000_000_000)
+                .expect("append");
         }
         let total: u64 = (1..=3)
             .map(|index| dir.join(format!("{FILE_NAME}.{index}")))

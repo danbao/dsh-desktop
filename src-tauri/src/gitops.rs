@@ -144,8 +144,7 @@ pub fn remove_orphan_packages(dir: &Path) -> anyhow::Result<Vec<String>> {
         if !is_orphan_package(&path) {
             continue;
         }
-        fs::remove_dir_all(&path)
-            .with_context(|| format!("移除孤儿包目录 {}", path.display()))?;
+        fs::remove_dir_all(&path).with_context(|| format!("移除孤儿包目录 {}", path.display()))?;
         removed.push(path.to_string_lossy().into_owned());
     }
     Ok(removed)
@@ -233,7 +232,11 @@ mod tests {
         let root = temp_dir("orphans");
         // Orphan: a deleted package leaving only ignored residue behind.
         fs::create_dir_all(root.join("packages/host/apiproxy/lib/types")).unwrap();
-        fs::write(root.join("packages/host/apiproxy/lib/types/api-proxy.js"), "stale").unwrap();
+        fs::write(
+            root.join("packages/host/apiproxy/lib/types/api-proxy.js"),
+            "stale",
+        )
+        .unwrap();
         fs::create_dir_all(root.join("packages/host/apiproxy/node_modules/x")).unwrap();
         // Live package: a manifest keeps it even with build output beside it.
         fs::create_dir_all(root.join("packages/host/live/lib")).unwrap();

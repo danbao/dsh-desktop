@@ -72,7 +72,10 @@ pub fn run() {
             util::emit_log(
                 app.handle(),
                 "desktop",
-                &format!("日志文件：{}", paths::logs_dir().join(logfile::FILE_NAME).display()),
+                &format!(
+                    "日志文件：{}",
+                    paths::logs_dir().join(logfile::FILE_NAME).display()
+                ),
             );
             if let Err(err) = tray::setup(app.handle()) {
                 // A missing tray degrades to window-only mode; the app stays
@@ -110,7 +113,9 @@ pub fn run() {
                 // window going away; the tray keeps the app alive, so it is
                 // vetoed. Explicit quits (`app.exit(0)` from the tray) carry
                 // a code and pass through to the Exit handler above.
-                tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+                tauri::RunEvent::ExitRequested {
+                    code: None, api, ..
+                } => {
                     api.prevent_exit();
                 }
                 _ => {}
