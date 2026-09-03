@@ -33,8 +33,14 @@ static ACTIVE_PGID: AtomicU32 = AtomicU32::new(0);
 /// libc, as async-signal-safety requires.
 pub fn install_signal_cleanup() {
     unsafe {
-        libc::signal(libc::SIGTERM, handle_term_signal as libc::sighandler_t);
-        libc::signal(libc::SIGINT, handle_term_signal as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            handle_term_signal as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            handle_term_signal as *const () as libc::sighandler_t,
+        );
     }
 }
 
@@ -93,6 +99,23 @@ pub struct RunningService {
     pub pgid: u32,
     pub stop_flag: Arc<AtomicBool>,
     pub supervisor: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SupervisorObservation {
+    StopRequested,
+    ChildExited,
+    Running,
+}
+
+fn observe_supervisor(stop_requested: bool, child_exited: bool) -> SupervisorObservation {
+    if stop_requested {
+        SupervisorObservation::StopRequested
+    } else if child_exited {
+        SupervisorObservation::ChildExited
+    } else {
+        SupervisorObservation::Running
+    }
 }
 
 /// Publishes every busy-state transition and guarantees cleanup on all exits.
@@ -158,6 +181,12 @@ impl AppState {
     /// Publish the current snapshot so the UI reflects a transition.
     fn changed(&self, app: &AppHandle) {
         snapshot::publish(app, self);
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -298,6 +327,7 @@ pub fn stop_service(app: &AppHandle, state: &AppState) -> Result<(), String> {
     };
 
     let pgid = running.pgid;
+    running.stop_flag.store(true, Ordering::SeqCst);
     ACTIVE_PGID.store(0, Ordering::SeqCst);
     util::kill_group(pgid, libc::SIGTERM);
     util::emit_log(app, "dsh", &format!("发送 SIGTERM（进程组 {pgid}）"));
@@ -364,12 +394,23 @@ fn supervise(
         if util::http_replies(port) {
             break;
         }
-        if let Some(status) = child.try_wait().ok().flatten() {
-            failure = Some(format!(
-                "dsh 进程提前退出（退出码 {}）",
-                status.code().unwrap_or(-1)
-            ));
-            break;
+        let child_status = child.try_wait().ok().flatten();
+        match observe_supervisor(stop_flag.load(Ordering::SeqCst), child_status.is_some()) {
+            SupervisorObservation::StopRequested => {
+                if child_status.is_none() {
+                    graceful_kill(&mut child, pgid);
+                }
+                stopped_by_user = true;
+                break;
+            }
+            SupervisorObservation::ChildExited => {
+                failure = Some(format!(
+                    "dsh 进程提前退出（退出码 {}）",
+                    child_status.and_then(|status| status.code()).unwrap_or(-1)
+                ));
+                break;
+            }
+            SupervisorObservation::Running => {}
         }
         if started.elapsed() > STARTUP_TIMEOUT {
             graceful_kill(&mut child, pgid);
@@ -407,9 +448,20 @@ fn supervise(
             return; // the stopping command owns the final state
         }
         std::thread::sleep(Duration::from_secs(2));
-        if child.try_wait().ok().flatten().is_some() {
-            reap_and_report(&app, child, readers, "dsh 进程意外退出".to_string());
-            return;
+        let child_exited = child.try_wait().ok().flatten().is_some();
+        match observe_supervisor(stop_flag.load(Ordering::SeqCst), child_exited) {
+            SupervisorObservation::StopRequested => {
+                if !child_exited {
+                    graceful_kill(&mut child, pgid);
+                }
+                reap_silently(child, readers);
+                return;
+            }
+            SupervisorObservation::ChildExited => {
+                reap_and_report(&app, child, readers, "dsh 进程意外退出".to_string());
+                return;
+            }
+            SupervisorObservation::Running => {}
         }
         if util::http_replies(port) {
             misses = 0;
@@ -558,13 +610,20 @@ fn reap_silently(mut child: Child, readers: [std::thread::JoinHandle<()>; 2]) {
     }
 }
 
+/// The tokenized workbench URL captured from the harness stdout, if any.
+pub fn workbench_url(state: &AppState) -> Option<String> {
+    let service = state.service.lock().expect("service lock");
+    service.url.clone().filter(|url| !url.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn extract_service_url_takes_tokenized_url_from_announcement_line() {
-        let line = "dsh web: http://127.0.0.1:3080/?token=AkN6Cf_OQeDJB3Mr0QtQ3tbPfF_rxbcrjSHdKMpXtNc";
+        let line =
+            "dsh web: http://127.0.0.1:3080/?token=AkN6Cf_OQeDJB3Mr0QtQ3tbPfF_rxbcrjSHdKMpXtNc";
         assert_eq!(
             extract_service_url(line, 3080).as_deref(),
             Some("http://127.0.0.1:3080/?token=AkN6Cf_OQeDJB3Mr0QtQ3tbPfF_rxbcrjSHdKMpXtNc")
@@ -576,16 +635,24 @@ mod tests {
             Some("http://127.0.0.1:3080/?token=abc123")
         );
         // Bare URL without a token is useless for auth: not captured.
-        assert_eq!(extract_service_url("dsh web: http://127.0.0.1:3080/", 3080), None);
+        assert_eq!(
+            extract_service_url("dsh web: http://127.0.0.1:3080/", 3080),
+            None
+        );
         // Other ports must not match.
-        assert_eq!(extract_service_url("dsh web: http://127.0.0.1:4000/?token=x", 3080), None);
+        assert_eq!(
+            extract_service_url("dsh web: http://127.0.0.1:4000/?token=x", 3080),
+            None
+        );
         // Unrelated lines: no capture.
         assert_eq!(extract_service_url("listening on port 3080", 3080), None);
     }
-}
 
-/// The tokenized workbench URL captured from the harness stdout, if any.
-pub fn workbench_url(state: &AppState) -> Option<String> {
-    let service = state.service.lock().expect("service lock");
-    service.url.clone().filter(|url| !url.is_empty())
+    #[test]
+    fn intentional_stop_wins_over_a_simultaneous_child_exit() {
+        assert_eq!(
+            observe_supervisor(true, true),
+            SupervisorObservation::StopRequested
+        );
+    }
 }

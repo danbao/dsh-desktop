@@ -174,8 +174,8 @@ mod tests {
 
     /// Respond to one TCP request with the given raw head, then close.
     fn serve_raw_head(head: &'static [u8]) -> u16 {
-        let listener = TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
-            .expect("bind");
+        let listener =
+            TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0))).expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
