@@ -106,6 +106,10 @@ pub fn run() {
                     let state = app_handle.state::<Arc<AppState>>();
                     service::kill_on_exit(&state);
                 }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    tray::show_main_window(app_handle);
+                }
                 // `code: None` is the implicit request raised by the last
                 // window going away; the tray keeps the app alive, so it is
                 // vetoed. Explicit quits (`app.exit(0)` from the tray) carry
