@@ -134,11 +134,51 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     }
 }
 
-fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+trait MainWindowActions {
+    fn unminimize(&self) -> Result<(), String>;
+    fn show(&self) -> Result<(), String>;
+    fn focus(&self) -> Result<(), String>;
+}
+
+impl<R: Runtime> MainWindowActions for tauri::WebviewWindow<R> {
+    fn unminimize(&self) -> Result<(), String> {
+        self.unminimize().map_err(|err| err.to_string())
+    }
+
+    fn show(&self) -> Result<(), String> {
+        self.show().map_err(|err| err.to_string())
+    }
+
+    fn focus(&self) -> Result<(), String> {
+        self.set_focus().map_err(|err| err.to_string())
+    }
+}
+
+fn restore_main_window(window: &impl MainWindowActions) -> Result<(), String> {
+    let mut failures = Vec::new();
+    if let Err(err) = window.unminimize() {
+        failures.push(format!("取消最小化失败：{err}"));
+    }
+    if let Err(err) = window.show() {
+        failures.push(format!("显示失败：{err}"));
+    }
+    if let Err(err) = window.focus() {
+        failures.push(format!("聚焦失败：{err}"));
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("；"))
+    }
+}
+
+pub(crate) fn show_main_window(app: &AppHandle) {
+    let result = app
+        .get_webview_window("main")
+        .ok_or_else(|| "找不到主窗口".to_string())
+        .and_then(|window| restore_main_window(&window));
+    if let Err(err) = result {
+        crate::util::emit_log(app, "desktop", &format!("恢复主窗口失败：{err}"));
     }
 }
 
@@ -182,4 +222,42 @@ fn quit(app: &AppHandle) {
         let _ = service::stop_service(&app, &state);
         app.exit(0);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::{restore_main_window, MainWindowActions};
+
+    #[derive(Default)]
+    struct RecordingWindow {
+        actions: RefCell<Vec<&'static str>>,
+    }
+
+    impl MainWindowActions for RecordingWindow {
+        fn unminimize(&self) -> Result<(), String> {
+            self.actions.borrow_mut().push("unminimize");
+            Ok(())
+        }
+
+        fn show(&self) -> Result<(), String> {
+            self.actions.borrow_mut().push("show");
+            Ok(())
+        }
+
+        fn focus(&self) -> Result<(), String> {
+            self.actions.borrow_mut().push("focus");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dock_reopen_restores_the_main_window() {
+        let window = RecordingWindow::default();
+
+        restore_main_window(&window).expect("restore window");
+
+        assert_eq!(window.actions.into_inner(), ["unminimize", "show", "focus"]);
+    }
 }
