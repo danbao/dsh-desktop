@@ -61,6 +61,11 @@ pub struct ToolchainEnv {
     pub configured_pnpm_path: Option<String>,
     pub problems: Vec<String>,
     pub ready: bool,
+    /// Registry the user set in the app, if any.
+    pub configured_npm_registry: Option<String>,
+    /// Registry child pnpm processes will use: explicit setting, else the
+    /// user's global `~/.npmrc`, else nothing (npm's upstream default).
+    pub effective_npm_registry: Option<String>,
     #[serde(skip)]
     effective_path: OsString,
 }
@@ -151,6 +156,16 @@ impl ToolchainEnv {
         }
 
         let effective_path = prepend_tool_dir(&path_with_package_tools, git.as_ref());
+        let configured_registry = config
+            .npm_registry
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let effective_registry = match configured_registry.as_ref() {
+            Some(registry) => Some(registry.clone()),
+            None => detect_npmrc_registry(),
+        };
         Self {
             node_version: node.as_ref().map(|tool| tool.version.clone()),
             pnpm_version: pnpm.as_ref().map(|tool| tool.version.clone()),
@@ -167,6 +182,8 @@ impl ToolchainEnv {
             configured_pnpm_path: config.pnpm_path.clone(),
             ready: problems.is_empty(),
             problems,
+            configured_npm_registry: configured_registry,
+            effective_npm_registry: effective_registry,
             effective_path,
         }
     }
@@ -180,6 +197,13 @@ impl ToolchainEnv {
         .ok_or_else(|| anyhow!("未找到可运行的 {}", tool.name()))?;
         let mut command = Command::new(bin);
         command.env("PATH", &self.effective_path);
+        // Corepack downloads the pinned pnpm itself and pnpm resolves every
+        // package tarball; both honor the registry through these variables.
+        if let (Tool::Pnpm, Some(registry)) = (tool, self.effective_npm_registry.as_deref()) {
+            command
+                .env("COREPACK_NPM_REGISTRY", registry)
+                .env("npm_config_registry", registry);
+        }
         Ok(command)
     }
 
@@ -433,6 +457,30 @@ fn prepend_dir(path: &OsStr, dir: Option<&Path>) -> OsString {
     std::env::join_paths(dirs).unwrap_or_else(|_| path.to_os_string())
 }
 
+/// Registry recorded in the user's global `~/.npmrc`, if any.
+fn detect_npmrc_registry() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let text = fs::read_to_string(PathBuf::from(home).join(".npmrc")).ok()?;
+    parse_npmrc_registry(&text)
+}
+
+/// npm re-reads `registry=` lines in order and the last one wins; comments
+/// start with `;` or `#`, and values may be quoted.
+fn parse_npmrc_registry(text: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.starts_with(';') || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "registry").then(|| value.trim().trim_matches('"').trim_matches('\''))
+        })
+        .filter(|value| !value.is_empty())
+        .last()
+        .map(str::to_string)
+}
+
 fn login_shell() -> Option<PathBuf> {
     // getpwuid reflects the configured login shell even when Finder did not
     // populate SHELL. Copy the C string immediately before another libc call.
@@ -665,6 +713,69 @@ mod tests {
         assert!(!node_version_ok("v22.18.0"));
         assert!(!node_version_ok("v23.0.0"));
         assert!(!node_version_ok("not-a-version"));
+    }
+
+    #[test]
+    fn npmrc_registry_last_value_wins_and_comments_are_ignored() {
+        assert_eq!(parse_npmrc_registry(""), None);
+        assert_eq!(
+            parse_npmrc_registry("# comment\n; also comment\nfund=false\naudit=false\n"),
+            None
+        );
+        assert_eq!(
+            parse_npmrc_registry(
+                "registry=https://first.example.com\nregistry=https://second.example.com\n"
+            ),
+            Some("https://second.example.com".to_string())
+        );
+        assert_eq!(
+            parse_npmrc_registry("registry = \"https://quoted.example.com\"\n"),
+            Some("https://quoted.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn pnpm_command_carries_registry_but_git_does_not() {
+        let env = ToolchainEnv {
+            node_version: None,
+            pnpm_version: None,
+            git_version: None,
+            node_bin: Some("/usr/bin/node".to_string()),
+            pnpm_bin: Some("/usr/bin/pnpm".to_string()),
+            git_bin: Some("/usr/bin/git".to_string()),
+            node_source: None,
+            pnpm_source: None,
+            git_source: None,
+            shell: None,
+            discovery_notes: Vec::new(),
+            configured_node_path: None,
+            configured_pnpm_path: None,
+            problems: Vec::new(),
+            ready: true,
+            configured_npm_registry: Some("https://registry.npmmirror.com".to_string()),
+            effective_npm_registry: Some("https://registry.npmmirror.com".to_string()),
+            effective_path: OsString::from("/usr/bin:/bin"),
+        };
+        let pnpm = env.command(Tool::Pnpm).expect("pnpm command");
+        assert_eq!(
+            command_env(&pnpm, "COREPACK_NPM_REGISTRY").as_deref(),
+            Some("https://registry.npmmirror.com")
+        );
+        assert_eq!(
+            command_env(&pnpm, "npm_config_registry").as_deref(),
+            Some("https://registry.npmmirror.com")
+        );
+        let git = env.command(Tool::Git).expect("git command");
+        assert_eq!(command_env(&git, "COREPACK_NPM_REGISTRY"), None);
+        assert_eq!(command_env(&git, "npm_config_registry"), None);
+    }
+
+    fn command_env(command: &Command, key: &str) -> Option<String> {
+        command
+            .get_envs()
+            .find(|(name, _)| name == &OsStr::new(key))
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
     }
 
     #[test]

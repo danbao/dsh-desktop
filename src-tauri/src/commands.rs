@@ -244,6 +244,7 @@ pub async fn set_toolchain_config(
     state: State<'_, Arc<AppState>>,
     node_path: Option<String>,
     pnpm_path: Option<String>,
+    npm_registry: Option<String>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -257,9 +258,20 @@ pub async fn set_toolchain_config(
                 (!trimmed.is_empty()).then(|| trimmed.to_string())
             })
         };
+        let npm_registry = match normalize(npm_registry) {
+            None => None,
+            Some(registry) => {
+                let registry = registry.trim_end_matches('/').to_string();
+                if !registry.starts_with("http://") && !registry.starts_with("https://") {
+                    return Err("npm Registry 需以 http:// 或 https:// 开头".to_string());
+                }
+                Some(registry)
+            }
+        };
         let mut config = paths::load_config().map_err(|err| err.to_string())?;
         config.node_path = normalize(node_path);
         config.pnpm_path = normalize(pnpm_path);
+        config.npm_registry = npm_registry;
         let env = EnvInfo::discover(&config);
         env.validate_overrides()?;
         paths::save_config(&config).map_err(|err| err.to_string())?;

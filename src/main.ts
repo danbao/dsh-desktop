@@ -31,6 +31,8 @@ interface Snapshot {
     discoveryNotes: string[]
     configuredNodePath: string | null
     configuredPnpmPath: string | null
+    configuredNpmRegistry: string | null
+    effectiveNpmRegistry: string | null
     ready: boolean
     problems: string[]
   }
@@ -517,6 +519,12 @@ function render(): void {
       env.pnpmBin ?? undefined,
     ],
     ['git', env.gitVersion ?? '未找到'],
+    [
+      'Registry',
+      env.effectiveNpmRegistry === null
+        ? '默认 registry.npmjs.org'
+        : `${env.effectiveNpmRegistry}${env.configuredNpmRegistry === null ? '（~/.npmrc）' : ''}`,
+    ],
     ...(env.discoveryNotes.length > 0 ? ([['检测说明', env.discoveryNotes.join('；')]] as KvPair[]) : []),
     ...(env.problems.length > 0 ? ([['问题', env.problems.join('；')]] as KvPair[]) : []),
   ])
@@ -635,6 +643,7 @@ function showToolchainSettings(show: boolean): void {
   if (show && snap !== null) {
     $<HTMLInputElement>('#node-path-input').value = snap.env.configuredNodePath ?? ''
     $<HTMLInputElement>('#pnpm-path-input').value = snap.env.configuredPnpmPath ?? ''
+    $<HTMLInputElement>('#npm-registry-input').value = snap.env.configuredNpmRegistry ?? ''
   }
 }
 
@@ -656,7 +665,8 @@ async function saveToolchain(): Promise<void> {
   try {
     const nodePath = $<HTMLInputElement>('#node-path-input').value.trim() || null
     const pnpmPath = $<HTMLInputElement>('#pnpm-path-input').value.trim() || null
-    await invoke('set_toolchain_config', { nodePath, pnpmPath })
+    const npmRegistry = $<HTMLInputElement>('#npm-registry-input').value.trim() || null
+    await invoke('set_toolchain_config', { nodePath, pnpmPath, npmRegistry })
     await refresh()
     showToolchainSettings(false)
     toast('工具链设置已保存并重新检测')

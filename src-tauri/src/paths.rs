@@ -23,6 +23,10 @@ pub struct Config {
     pub node_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pnpm_path: Option<String>,
+    /// Optional npm registry override for corepack/pnpm. Missing values fall
+    /// back to the user's global `~/.npmrc`, then the upstream default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub npm_registry: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -36,6 +40,7 @@ impl Default for Config {
             autostart: true,
             node_path: None,
             pnpm_path: None,
+            npm_registry: None,
         }
     }
 }
@@ -146,5 +151,6 @@ mod tests {
         assert!(!config.autostart);
         assert_eq!(config.node_path, None);
         assert_eq!(config.pnpm_path, None);
+        assert_eq!(config.npm_registry, None);
     }
 }

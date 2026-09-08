@@ -51,6 +51,12 @@
                     <button id="btn-pick-pnpm" class="btn btn-small" type="button">选择…</button>
                   </span>
                 </label>
+                <label class="tool-path-field">
+                  <span>npm Registry（可选）</span>
+                  <span class="path-control">
+                    <input id="npm-registry-input" type="text" placeholder="自动读取 ~/.npmrc，默认 registry.npmjs.org" spellcheck="false" />
+                  </span>
+                </label>
                 <p id="toolchain-running-hint" class="settings-hint hidden">请先停止服务，再保存工具链设置。</p>
                 <div class="settings-actions">
                   <button id="btn-cancel-toolchain" class="btn btn-small btn-ghost" type="button">取消</button>
