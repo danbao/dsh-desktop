@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context};
 use serde::Serialize;
 
-use crate::paths::Config;
+use crate::paths::{self, Config};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -235,15 +235,7 @@ fn normalized_override_with_home(value: Option<&str>, home: Option<OsString>) ->
     if value.is_empty() {
         return None;
     }
-    if value == "~" || value.starts_with("~/") {
-        let home = home?;
-        return Some(if value == "~" {
-            PathBuf::from(home)
-        } else {
-            PathBuf::from(home).join(&value[2..])
-        });
-    }
-    Some(PathBuf::from(value))
+    paths::expand_home(value, home)
 }
 
 fn resolve_manual(path: &Path, tool: Tool, path_env: &OsStr) -> Result<ResolvedTool, String> {
@@ -476,8 +468,7 @@ fn parse_npmrc_registry(text: &str) -> Option<String> {
             let (key, value) = line.split_once('=')?;
             (key.trim() == "registry").then(|| value.trim().trim_matches('"').trim_matches('\''))
         })
-        .filter(|value| !value.is_empty())
-        .last()
+        .rfind(|value| !value.is_empty())
         .map(str::to_string)
 }
 

@@ -1,6 +1,7 @@
 //! App data locations and persisted configuration.
 
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
@@ -27,6 +28,10 @@ pub struct Config {
     /// back to the user's global `~/.npmrc`, then the upstream default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub npm_registry: Option<String>,
+    /// Optional harness checkout location. Must be an existing git repo; the
+    /// app then leaves its git state alone (no clone/fetch/reset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_path: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -41,6 +46,7 @@ impl Default for Config {
             node_path: None,
             pnpm_path: None,
             npm_registry: None,
+            harness_path: None,
         }
     }
 }
@@ -64,18 +70,65 @@ pub fn logs_dir() -> PathBuf {
 }
 
 /// Where the managed harness checkout lives. A development override
-/// (`DSH_DESKTOP_HARNESS_PATH`) points the whole pipeline at an existing
-/// source tree instead — cloning is skipped, everything else behaves the same.
+/// (`DSH_DESKTOP_HARNESS_PATH`) or a user-configured path points the whole
+/// pipeline at an existing source tree instead: the app never clones,
+/// fetches, or resets it — it only reads HEAD and builds.
 pub fn harness_dir() -> PathBuf {
-    match env::var("DSH_DESKTOP_HARNESS_PATH") {
-        Ok(path) if !path.trim().is_empty() => PathBuf::from(path),
-        _ => app_dir().join("harness"),
-    }
+    let config_path = load_config().ok().and_then(|config| config.harness_path);
+    resolve_harness_dir(
+        env::var("DSH_DESKTOP_HARNESS_PATH").ok().as_deref(),
+        config_path.as_deref(),
+        env::var_os("HOME"),
+        &app_dir().join("harness"),
+    )
 }
 
-/// Whether the harness directory is an externally provided tree (no clone).
+/// Resolution order: environment override, persisted config, managed default.
+/// Pure so tests never touch process-global state.
+fn resolve_harness_dir(
+    env_override: Option<&str>,
+    config_path: Option<&str>,
+    home: Option<OsString>,
+    default: &std::path::Path,
+) -> PathBuf {
+    if let Some(path) = env_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = config_path.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(expanded) = expand_home(path, home) {
+            return expanded;
+        }
+    }
+    default.to_path_buf()
+}
+
+/// Whether the harness directory is an externally provided tree whose git
+/// state the app must leave alone.
 pub fn harness_is_external() -> bool {
-    env::var_os("DSH_DESKTOP_HARNESS_PATH").is_some()
+    env::var("DSH_DESKTOP_HARNESS_PATH")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        || load_config()
+            .ok()
+            .and_then(|config| config.harness_path)
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Expand a leading `~` against `home`; anything else passes through
+/// unchanged. Shared by tool-path overrides and the harness path.
+pub(crate) fn expand_home(value: &str, home: Option<OsString>) -> Option<PathBuf> {
+    if value == "~" || value.starts_with("~/") {
+        let home = home?;
+        return Some(if value == "~" {
+            PathBuf::from(home)
+        } else {
+            PathBuf::from(home).join(&value[2..])
+        });
+    }
+    Some(PathBuf::from(value))
 }
 
 /// Load `config.json`, falling back to defaults; malformed content fails loud.
@@ -152,5 +205,34 @@ mod tests {
         assert_eq!(config.node_path, None);
         assert_eq!(config.pnpm_path, None);
         assert_eq!(config.npm_registry, None);
+        assert_eq!(config.harness_path, None);
+    }
+
+    #[test]
+    fn harness_dir_prefers_env_then_config_then_default() {
+        let home = OsString::from("/tmp/dsh-home");
+        let default = PathBuf::from("/tmp/dsh-app/harness");
+        assert_eq!(
+            resolve_harness_dir(None, None, Some(home.clone()), &default),
+            default
+        );
+        assert_eq!(
+            resolve_harness_dir(None, Some("~/src/harness"), Some(home.clone()), &default),
+            PathBuf::from("/tmp/dsh-home/src/harness")
+        );
+        assert_eq!(
+            resolve_harness_dir(
+                Some("/tmp/dev-harness"),
+                Some("~/src/harness"),
+                Some(home.clone()),
+                &default
+            ),
+            PathBuf::from("/tmp/dev-harness")
+        );
+        // Empty strings fall through instead of pointing at the working dir.
+        assert_eq!(
+            resolve_harness_dir(Some("  "), Some(""), Some(home), &default),
+            default
+        );
     }
 }

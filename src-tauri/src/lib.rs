@@ -96,6 +96,7 @@ pub fn run() {
             commands::set_config,
             commands::refresh_toolchain,
             commands::set_toolchain_config,
+            commands::set_harness_path,
             commands::get_plugins,
             commands::check_plugin_updates,
             commands::manage_plugin,

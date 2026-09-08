@@ -41,7 +41,7 @@ pub fn ensure_cloned(dir: &Path, app: &AppHandle, env: &EnvInfo) -> anyhow::Resu
     }
     if paths::harness_is_external() {
         return Err(anyhow!(
-            "DSH_DESKTOP_HARNESS_PATH 指向的目录不是 git 仓库：{}",
+            "Harness 路径指向的目录不是 git 仓库：{}",
             dir.display()
         ));
     }
