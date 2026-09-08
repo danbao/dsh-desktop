@@ -161,6 +161,19 @@ fn sync_locked(
         });
     }
 
+    // A user-provided tree is theirs: fetching or hard-resetting it could
+    // destroy uncommitted work, so the app only reads HEAD and builds.
+    if paths::harness_is_external() {
+        *state.last_fetch_behind.lock().expect("behind lock") = None;
+        let head = gitops::head_info(&harness_dir, env);
+        snapshot::publish(app, state);
+        return Ok(SyncResult {
+            updated: false,
+            short_commit: head.map(|head| head.short_commit),
+            behind: 0,
+        });
+    }
+
     gitops::fetch_latest(&harness_dir, app, env).map_err(|err| err.to_string())?;
     let behind = gitops::behind_count(&harness_dir, env).map_err(|err| err.to_string())?;
     *state.last_fetch_behind.lock().expect("behind lock") = Some(behind);
@@ -244,6 +257,7 @@ pub async fn set_toolchain_config(
     state: State<'_, Arc<AppState>>,
     node_path: Option<String>,
     pnpm_path: Option<String>,
+    npm_registry: Option<String>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -257,14 +271,74 @@ pub async fn set_toolchain_config(
                 (!trimmed.is_empty()).then(|| trimmed.to_string())
             })
         };
+        let npm_registry = match normalize(npm_registry) {
+            None => None,
+            Some(registry) => {
+                let registry = registry.trim_end_matches('/').to_string();
+                if !registry.starts_with("http://") && !registry.starts_with("https://") {
+                    return Err("npm Registry 需以 http:// 或 https:// 开头".to_string());
+                }
+                Some(registry)
+            }
+        };
         let mut config = paths::load_config().map_err(|err| err.to_string())?;
         config.node_path = normalize(node_path);
         config.pnpm_path = normalize(pnpm_path);
+        config.npm_registry = npm_registry;
         let env = EnvInfo::discover(&config);
         env.validate_overrides()?;
         paths::save_config(&config).map_err(|err| err.to_string())?;
         state.set_toolchain(env);
         snapshot::refresh_and_log(&app, &state, "工具链设置已保存并重新检测");
+        Ok(())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Point the pipeline at an existing harness checkout. Empty input restores
+/// the managed default (the app clones into it when missing).
+#[tauri::command]
+pub async fn set_harness_path(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    path: Option<String>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _io = state.io.lock().expect("io lock");
+        if state.service.lock().expect("service lock").status != "stopped" {
+            return Err("请先停止服务，再修改 Harness 路径".to_string());
+        }
+        let requested = path.as_deref().map(str::trim).filter(|v| !v.is_empty());
+        let resolved = match requested {
+            None => None,
+            Some(raw) => {
+                let expanded = paths::expand_home(raw, std::env::var_os("HOME"))
+                    .ok_or("无法展开 ~：未设置 HOME")?;
+                if !expanded.is_absolute() {
+                    return Err("Harness 路径必须是绝对路径或以 ~/ 开头".to_string());
+                }
+                if !gitops::is_repo(&expanded) {
+                    return Err(format!(
+                        "{} 不是 git 仓库：请先克隆 deepseek-harness 到该目录",
+                        expanded.display()
+                    ));
+                }
+                Some(expanded.to_string_lossy().into_owned())
+            }
+        };
+        let mut config = paths::load_config().map_err(|err| err.to_string())?;
+        config.harness_path = resolved;
+        paths::save_config(&config).map_err(|err| err.to_string())?;
+        // Behind counts belong to the previous tree; drop the stale reading.
+        *state.last_fetch_behind.lock().expect("behind lock") = None;
+        let summary = if requested.is_some() {
+            "Harness 路径已切换，构建标记按路径独立保存；如需构建请点击「更新代码并构建」"
+        } else {
+            "Harness 路径已恢复默认，点击「更新代码并构建」重新克隆"
+        };
+        snapshot::refresh_and_log(&app, &state, summary);
         Ok(())
     })
     .await

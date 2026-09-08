@@ -31,6 +31,8 @@ interface Snapshot {
     discoveryNotes: string[]
     configuredNodePath: string | null
     configuredPnpmPath: string | null
+    configuredNpmRegistry: string | null
+    effectiveNpmRegistry: string | null
     ready: boolean
     problems: string[]
   }
@@ -102,6 +104,7 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
 let snap: Snapshot | null = null
 let logStick = true
 let toolchainSaving = false
+let harnessPathSaving = false
 let pluginCatalog: PluginCatalog | null = null
 let pluginUpdates = new Map<string, PluginUpdate>()
 let activeView: 'console' | 'plugins' = 'console'
@@ -517,6 +520,12 @@ function render(): void {
       env.pnpmBin ?? undefined,
     ],
     ['git', env.gitVersion ?? '未找到'],
+    [
+      'Registry',
+      env.effectiveNpmRegistry === null
+        ? '默认 registry.npmjs.org'
+        : `${env.effectiveNpmRegistry}${env.configuredNpmRegistry === null ? '（~/.npmrc）' : ''}`,
+    ],
     ...(env.discoveryNotes.length > 0 ? ([['检测说明', env.discoveryNotes.join('；')]] as KvPair[]) : []),
     ...(env.problems.length > 0 ? ([['问题', env.problems.join('；')]] as KvPair[]) : []),
   ])
@@ -574,6 +583,12 @@ function render(): void {
   pickNodeBtn.disabled = running || service.status === 'starting' || toolchainSaving
   pickPnpmBtn.disabled = running || service.status === 'starting' || toolchainSaving
   $('#toolchain-running-hint').classList.toggle('hidden', service.status === 'stopped')
+  $<HTMLButtonElement>('#btn-toggle-harness-path').disabled = busy !== null
+  $<HTMLButtonElement>('#btn-save-harness-path').disabled =
+    busy !== null || running || service.status === 'starting' || harnessPathSaving
+  $<HTMLButtonElement>('#btn-pick-harness-dir').disabled =
+    running || service.status === 'starting' || harnessPathSaving
+  $('#harness-path-running-hint').classList.toggle('hidden', service.status === 'stopped')
   renderPlugins()
 
   // The workbench runs in the default browser (open_workbench): this window
@@ -635,6 +650,7 @@ function showToolchainSettings(show: boolean): void {
   if (show && snap !== null) {
     $<HTMLInputElement>('#node-path-input').value = snap.env.configuredNodePath ?? ''
     $<HTMLInputElement>('#pnpm-path-input').value = snap.env.configuredPnpmPath ?? ''
+    $<HTMLInputElement>('#npm-registry-input').value = snap.env.configuredNpmRegistry ?? ''
   }
 }
 
@@ -656,7 +672,8 @@ async function saveToolchain(): Promise<void> {
   try {
     const nodePath = $<HTMLInputElement>('#node-path-input').value.trim() || null
     const pnpmPath = $<HTMLInputElement>('#pnpm-path-input').value.trim() || null
-    await invoke('set_toolchain_config', { nodePath, pnpmPath })
+    const npmRegistry = $<HTMLInputElement>('#npm-registry-input').value.trim() || null
+    await invoke('set_toolchain_config', { nodePath, pnpmPath, npmRegistry })
     await refresh()
     showToolchainSettings(false)
     toast('工具链设置已保存并重新检测')
@@ -677,6 +694,47 @@ async function refreshToolchain(): Promise<void> {
   } catch (err) {
     toast(`重新检测失败：${String(err)}`, true)
     appendLog({ source: 'ui', line: `重新检测失败：${String(err)}` })
+  }
+}
+
+function showHarnessPathSettings(show: boolean): void {
+  const panel = $('#harness-path-settings')
+  panel.classList.toggle('hidden', !show)
+  const toggle = $<HTMLButtonElement>('#btn-toggle-harness-path')
+  toggle.setAttribute('aria-expanded', String(show))
+  toggle.textContent = show ? '收起设置' : '路径设置'
+  if (show && snap !== null) {
+    $<HTMLInputElement>('#harness-path-input').value = snap.harness.path
+  }
+}
+
+async function pickDirectory(inputSelector: string, title: string): Promise<void> {
+  try {
+    const selected = await open({ multiple: false, directory: true, title })
+    if (typeof selected === 'string') {
+      $<HTMLInputElement>(inputSelector).value = selected
+    }
+  } catch (err) {
+    toast(`选择目录失败：${String(err)}`, true)
+  }
+}
+
+async function saveHarnessPath(): Promise<void> {
+  if (harnessPathSaving) return
+  harnessPathSaving = true
+  render()
+  try {
+    const path = $<HTMLInputElement>('#harness-path-input').value.trim() || null
+    await invoke('set_harness_path', { path })
+    await refresh()
+    showHarnessPathSettings(false)
+    toast('Harness 路径已保存')
+  } catch (err) {
+    toast(`保存 Harness 路径失败：${String(err)}`, true)
+    appendLog({ source: 'ui', line: `保存 Harness 路径失败：${String(err)}` })
+  } finally {
+    harnessPathSaving = false
+    render()
   }
 }
 
@@ -870,6 +928,12 @@ function bind(): void {
   $('#btn-save-toolchain').addEventListener('click', () => void saveToolchain())
   $('#btn-pick-node').addEventListener('click', () => void pickExecutable('#node-path-input', '选择 Node 可执行文件'))
   $('#btn-pick-pnpm').addEventListener('click', () => void pickExecutable('#pnpm-path-input', '选择 pnpm 可执行文件'))
+  $('#btn-toggle-harness-path').addEventListener('click', () => {
+    showHarnessPathSettings($('#harness-path-settings').classList.contains('hidden'))
+  })
+  $('#btn-cancel-harness-path').addEventListener('click', () => showHarnessPathSettings(false))
+  $('#btn-save-harness-path').addEventListener('click', () => void saveHarnessPath())
+  $('#btn-pick-harness-dir').addEventListener('click', () => void pickDirectory('#harness-path-input', '选择 Harness 目录'))
   $('#btn-start').addEventListener('click', () => void run('start_service'))
   $('#btn-stop').addEventListener('click', () => void run('stop_service'))
   $('#btn-save-port').addEventListener('click', async () => {
