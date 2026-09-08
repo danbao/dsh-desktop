@@ -112,21 +112,6 @@ fn stable_hash(text: &str) -> u64 {
     hash
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn legacy_config_without_tool_paths_remains_compatible() {
-        let config: Config =
-            serde_json::from_str(r#"{"port":3088,"autostart":false}"#).expect("legacy config");
-        assert_eq!(config.port, 3088);
-        assert!(!config.autostart);
-        assert_eq!(config.node_path, None);
-        assert_eq!(config.pnpm_path, None);
-    }
-}
-
 /// Commit recorded by the last successful build, if any.
 pub fn stamp_commit(harness_dir: &std::path::Path) -> Option<String> {
     let text = fs::read_to_string(stamp_path(harness_dir)).ok()?;
@@ -147,4 +132,19 @@ pub fn write_stamp(harness_dir: &std::path::Path, commit: &str) -> anyhow::Resul
         serde_json::to_string_pretty(&body)? + "\n",
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_without_tool_paths_remains_compatible() {
+        let config: Config =
+            serde_json::from_str(r#"{"port":3088,"autostart":false}"#).expect("legacy config");
+        assert_eq!(config.port, 3088);
+        assert!(!config.autostart);
+        assert_eq!(config.node_path, None);
+        assert_eq!(config.pnpm_path, None);
+    }
 }
