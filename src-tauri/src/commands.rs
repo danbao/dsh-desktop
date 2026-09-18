@@ -161,16 +161,27 @@ fn sync_locked(
         });
     }
 
-    // A user-provided tree is theirs: fetching or hard-resetting it could
-    // destroy uncommitted work, so the app only reads HEAD and builds.
+    // A user-provided tree is theirs: it is never reset or cleaned, since
+    // that would destroy uncommitted work. Fetching is safe (it only moves
+    // FETCH_HEAD and remote-tracking refs), so "检查更新" still reports how
+    // far behind upstream the user's tree is.
     if paths::harness_is_external() {
-        *state.last_fetch_behind.lock().expect("behind lock") = None;
+        gitops::fetch_latest(&harness_dir, app, env).map_err(|err| err.to_string())?;
+        let behind = gitops::behind_count(&harness_dir, env).map_err(|err| err.to_string())?;
+        *state.last_fetch_behind.lock().expect("behind lock") = Some(behind);
+        if behind > 0 {
+            util::emit_log(
+                app,
+                "git",
+                &format!("外部目录由用户管理：落后上游 {behind} 个提交，请自行更新（如 git pull）后再构建"),
+            );
+        }
         let head = gitops::head_info(&harness_dir, env);
         snapshot::publish(app, state);
         return Ok(SyncResult {
             updated: false,
             short_commit: head.map(|head| head.short_commit),
-            behind: 0,
+            behind,
         });
     }
 
